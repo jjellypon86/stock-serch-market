@@ -1,8 +1,11 @@
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 
 from backtest import run_backtest
 from scanner import scan_day_trading, scan_swing
+from sheets import is_configured, load_history, save_scan_results, update_results
 from utils import get_last_trading_date, get_stock_news
 
 st.set_page_config(
@@ -18,11 +21,13 @@ with st.sidebar:
     st.header("스캔 설정")
     market = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"], index=0)
     default_date = get_last_trading_date()
-    scan_date = st.date_input("조회 날짜", value=None, help="기본값: 직전 거래일")
+    scan_date = st.date_input("조회 날짜", value=datetime.strptime(default_date, "%Y%m%d").date())
     date_str = scan_date.strftime("%Y%m%d") if scan_date else default_date
     st.caption(f"조회 기준일: {date_str[:4]}.{date_str[4:6]}.{date_str[6:]}")
 
-tab_day, tab_swing, tab_backtest = st.tabs(["📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트"])
+tab_day, tab_swing, tab_backtest, tab_verify = st.tabs([
+    "📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트", "📈 검증"
+])
 
 
 def render_stock_card(row: pd.Series) -> None:
@@ -111,7 +116,11 @@ with tab_day:
         if df_day.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            st.success(f"{len(df_day)}개 종목 발견")
+            saved = save_scan_results(df_day, "day", market, date_str)
+            if saved:
+                st.success(f"{len(df_day)}개 종목 발견 — Google Sheets 저장 완료")
+            else:
+                st.success(f"{len(df_day)}개 종목 발견")
             render_metric_cards(df_day)
 
             st.divider()
@@ -157,7 +166,11 @@ with tab_swing:
         if df_swing.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            st.success(f"{len(df_swing)}개 종목 발견")
+            saved = save_scan_results(df_swing, "swing", market, date_str)
+            if saved:
+                st.success(f"{len(df_swing)}개 종목 발견 — Google Sheets 저장 완료")
+            else:
+                st.success(f"{len(df_swing)}개 종목 발견")
             render_metric_cards(df_swing)
 
             st.divider()
@@ -263,3 +276,70 @@ with tab_backtest:
                         use_container_width=True,
                         hide_index=True,
                     )
+
+# 검증 탭
+with tab_verify:
+    st.subheader("전략 검증")
+
+    if not is_configured():
+        st.warning("Google Sheets가 연동되지 않았습니다. Streamlit Cloud Secrets에 `gcp_service_account`를 설정해 주세요.")
+    else:
+        if st.button("🔄 결과 업데이트", key="btn_update"):
+            with st.spinner("미완료 종목 결과 자동 판정 중..."):
+                n = update_results()
+            st.success(f"{n}개 종목 결과 업데이트 완료") if n > 0 else st.info("업데이트할 항목이 없습니다.")
+
+        df_hist = load_history()
+
+        if df_hist.empty:
+            st.info("저장된 히스토리가 없습니다. 스캔을 먼저 실행해 주세요.")
+        else:
+            df_done = df_hist[df_hist["result"].isin(["WIN", "LOSS", "EXPIRED"])].copy()
+
+            if not df_done.empty:
+                df_done["profit_pct"] = pd.to_numeric(df_done["profit_pct"], errors="coerce")
+
+                st.subheader("전략 검증 통계 (전체 추천 기준)")
+                wins      = (df_done["result"] == "WIN").sum()
+                total     = len(df_done)
+                win_rate  = round(wins / total * 100, 1)
+                expectancy = round(df_done["profit_pct"].mean(), 2)
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("총 신호수", total)
+                c2.metric("승률", f"{win_rate}%")
+                c3.metric("기대값", f"{expectancy}%",
+                          delta="양수=수익" if expectancy > 0 else "음수=손실",
+                          delta_color="normal" if expectancy > 0 else "inverse")
+                c4.metric("평균 수익(WIN)", f"{round(df_done[df_done['result']=='WIN']['profit_pct'].mean(), 2)}%")
+
+                df_actual = df_done[df_done["actual_buy"].astype(str).str.upper() == "Y"]
+                if not df_actual.empty:
+                    st.divider()
+                    st.subheader("실거래 추적 (actual_buy=Y)")
+                    wins_a     = (df_actual["result"] == "WIN").sum()
+                    total_a    = len(df_actual)
+                    wr_a       = round(wins_a / total_a * 100, 1)
+                    expect_a   = round(df_actual["profit_pct"].mean(), 2)
+                    ca1, ca2, ca3 = st.columns(3)
+                    ca1.metric("실거래 횟수", total_a)
+                    ca2.metric("실거래 승률", f"{wr_a}%")
+                    ca3.metric("실거래 기대값", f"{expect_a}%",
+                               delta_color="normal" if expect_a > 0 else "inverse")
+
+            st.divider()
+            st.subheader("추천 히스토리")
+            st.dataframe(
+                df_hist.rename(columns={
+                    "scan_date": "스캔일", "strategy": "전략", "market": "시장",
+                    "ticker": "종목코드", "name": "종목명",
+                    "buy_price": "매수참고가", "entry_price": "진입가",
+                    "take_profit": "익절가", "stop_loss": "손절가",
+                    "risk_reward": "손익비", "pullback_pct": "눌림(%)",
+                    "inst_days": "기관", "foreign_days": "외국인",
+                    "result": "결과", "profit_pct": "수익률(%)", "hold_days": "보유일",
+                    "actual_buy": "실거래",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )

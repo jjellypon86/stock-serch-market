@@ -11,8 +11,9 @@ from utils import (
     get_stock_listing,
 )
 
-MIN_MARKET_CAP = 30_000_000_000   # 시가총액 300억 하한선
-MIN_TRADE_AMOUNT = 1_000_000_000  # 거래대금 10억 하한선
+MIN_MARKET_CAP   = 30_000_000_000   # 시가총액 300억 하한선
+DAY_MIN_TRADE    = 5_000_000_000   # 단기 거래대금 50억↑
+SWING_MIN_TRADE  = 10_000_000_000  # 스윙 거래대금 100억↑
 
 DAY_TP_MULT = 2.0
 DAY_SL_MULT = 1.0
@@ -63,7 +64,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
 
     candidates = df_listing[
         (df_listing["market_cap"] >= MIN_MARKET_CAP) &
-        (df_listing["거래대금"] >= MIN_TRADE_AMOUNT)
+        (df_listing["거래대금"] >= DAY_MIN_TRADE)
     ].copy()
 
     if candidates.empty:
@@ -92,8 +93,8 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         ma20 = df["MA20"].iloc[-1]
         ma60 = df["MA60"].iloc[-1]
 
-        # ① 단기 상승 추세
-        if not (close > ma20 > ma60):
+        # ① 중기 상승 추세 (MA60 위 유지, MA20 단기 이탈 허용)
+        if not (close > ma60 and ma60 > df["MA60"].iloc[-2]):
             continue
 
         # ② 최근 3일 중 하락일 >= 2
@@ -102,15 +103,17 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         if _count_down_days(df, window=3) < 2:
             continue
 
-        # ③ MA20 ±3% 이내
+        # ③ MA20 -3~+1% 이내 (MA20 살짝 아래까지 허용)
         pullback_pct = (close - ma20) / ma20 * 100
-        if not (-PULLBACK_BAND * 100 <= pullback_pct <= PULLBACK_BAND * 100):
+        if not (-3.0 <= pullback_pct <= 1.0):
             continue
 
-        # ④ 거래량 감소
-        vol_3d = df["거래량"].iloc[-3:].mean()
-        vol_20d = df["거래량"].iloc[-20:].mean()
-        if vol_20d == 0 or vol_3d >= vol_20d * 0.7:
+        # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
+        if len(df) < 26:
+            continue
+        vol_3d   = df["거래량"].iloc[-3:].mean()
+        vol_prev = df["거래량"].iloc[-23:-3].mean()
+        if vol_prev == 0 or vol_3d >= vol_prev * 0.7:
             continue
 
         # ⑤ 수급 필터
@@ -133,7 +136,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             "buy_price": int(close),
             "close": int(close),
             "pullback_pct": round(pullback_pct, 2),
-            "vol_ratio": round(vol_3d / vol_20d, 2),
+            "vol_ratio": round(vol_3d / vol_prev, 2),
             "inst_days": inst_days,
             "foreign_days": foreign_days,
             "take_profit": tp,
@@ -167,7 +170,7 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
 
     candidates = df_listing[
         (df_listing["market_cap"] >= MIN_MARKET_CAP) &
-        (df_listing["거래대금"] >= MIN_TRADE_AMOUNT)
+        (df_listing["거래대금"] >= SWING_MIN_TRADE)
     ].copy()
 
     if candidates.empty:
@@ -196,23 +199,25 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
         ma60 = df["MA60"].iloc[-1]
         ma120 = df["MA120"].iloc[-1]
 
-        # ① 중기 상승 추세
-        if not (close > ma60 > ma120):
+        # ① 장기 상승 추세 (MA120 위 유지, MA60 단기 이탈 허용)
+        if not (close > ma120 and ma120 > df["MA120"].iloc[-2]):
             continue
 
         # ② 최근 5일 중 하락일 >= 3
         if _count_down_days(df, window=5) < 3:
             continue
 
-        # ③ MA60 ±3% 이내
+        # ③ MA60 -3~+1% 이내 (MA60 살짝 아래까지 허용)
         pullback_pct = (close - ma60) / ma60 * 100
-        if not (-PULLBACK_BAND * 100 <= pullback_pct <= PULLBACK_BAND * 100):
+        if not (-3.0 <= pullback_pct <= 1.0):
             continue
 
-        # ④ 거래량 감소
-        vol_5d = df["거래량"].iloc[-5:].mean()
-        vol_20d = df["거래량"].iloc[-20:].mean()
-        if vol_20d == 0 or vol_5d >= vol_20d * 0.7:
+        # ④ 거래량 감소 (눌림 5일 vs 직전 20일 비교 — 구간 분리)
+        if len(df) < 28:
+            continue
+        vol_5d   = df["거래량"].iloc[-5:].mean()
+        vol_prev = df["거래량"].iloc[-25:-5].mean()
+        if vol_prev == 0 or vol_5d >= vol_prev * 0.7:
             continue
 
         # ⑤ 수급 필터
@@ -234,7 +239,7 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
             "buy_price": int(close),
             "close": int(close),
             "pullback_pct": round(pullback_pct, 2),
-            "vol_ratio": round(vol_5d / vol_20d, 2),
+            "vol_ratio": round(vol_5d / vol_prev, 2),
             "inst_days": inst_days,
             "foreign_days": foreign_days,
             "ma60": int(ma60),
