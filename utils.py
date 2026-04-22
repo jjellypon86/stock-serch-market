@@ -44,31 +44,73 @@ def _parse_naver_number(text: str) -> int:
 @st.cache_data(ttl=3600)
 def get_stock_listing(market: str = "KOSPI") -> pd.DataFrame:
     """
-    시장 전체 종목 정보 조회 (오늘 기준 스냅샷)
-    반환 컬럼: name, 시가, 고가, 저가, 종가, 거래량, 거래대금, market_cap
-    인덱스: 종목코드
+    네이버 금융 시가총액 순 페이지에서 종목 리스팅 (KRX API 불필요)
+    시총 300억 미만 종목 도달 시 스캔 중단
+    거래대금 = 현재가 × 거래량 (근사치)
     """
-    try:
-        df = fdr.StockListing(market)
-        if df.empty:
-            st.warning(f"{market} 종목 데이터를 가져올 수 없습니다.")
-            return pd.DataFrame()
-        df = df.rename(columns={
-            "Code": "ticker",
-            "Name": "name",
-            "Marcap": "market_cap",
-            "Open": "시가",
-            "High": "고가",
-            "Low": "저가",
-            "Close": "종가",
-            "Volume": "거래량",
-            "Amount": "거래대금",
-        })
-        df = df.set_index("ticker")
-        return df
-    except Exception as e:
-        st.warning(f"{market} 데이터 조회 실패: {e}")
+    sosok = "0" if market == "KOSPI" else "1"
+    stocks: list[dict] = []
+    MIN_CAP = 30_000_000_000  # 300억
+
+    for page in range(1, 150):
+        url = (
+            f"https://finance.naver.com/sise/sise_market_sum.naver"
+            f"?sosok={sosok}&page={page}"
+        )
+        try:
+            resp = requests.get(url, headers=_NAVER_HEADERS, timeout=10)
+            resp.encoding = "euc-kr"
+            soup = BeautifulSoup(resp.text, "lxml")
+        except Exception:
+            break
+
+        table = soup.find("table", class_="type_2")
+        if not table:
+            break
+
+        found = False
+        stop = False
+        for row in table.find_all("tr"):
+            cols = row.find_all("td")
+            if len(cols) < 10:
+                continue
+            a_tag = cols[1].find("a")
+            if not a_tag or "code=" not in a_tag.get("href", ""):
+                continue
+
+            ticker = a_tag["href"].split("code=")[-1].strip()
+            name = a_tag.get_text(strip=True)
+            close = _parse_naver_number(cols[2].get_text())
+            market_cap = _parse_naver_number(cols[6].get_text()) * 100_000_000  # 억→원
+            volume = _parse_naver_number(cols[9].get_text())
+            trade_amount = close * volume  # 거래대금 근사치
+
+            if market_cap < MIN_CAP:
+                stop = True
+                break
+
+            stocks.append({
+                "ticker": ticker,
+                "name": name,
+                "종가": close,
+                "거래대금": trade_amount,
+                "market_cap": market_cap,
+                "거래량": volume,
+            })
+            found = True
+
+        if stop or not found:
+            break
+
+    if not stocks:
+        st.warning(f"{market} 종목 데이터를 가져올 수 없습니다.")
         return pd.DataFrame()
+
+    return (
+        pd.DataFrame(stocks)
+        .drop_duplicates("ticker")
+        .set_index("ticker")
+    )
 
 
 @st.cache_data(ttl=3600)
@@ -95,16 +137,17 @@ def get_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=86400)
 def get_ticker_name(ticker: str, market: str = "KOSPI") -> str:
-    """종목 코드 → 종목명 변환"""
+    """종목 코드 → 종목명 변환 (네이버 금융)"""
     try:
-        df = fdr.StockListing(market)
-        row = df[df["Code"] == ticker]
-        if not row.empty:
-            return row.iloc[0]["Name"]
-        df2 = fdr.StockListing("KOSDAQ")
-        row2 = df2[df2["Code"] == ticker]
-        if not row2.empty:
-            return row2.iloc[0]["Name"]
+        url = f"https://finance.naver.com/item/main.naver?code={ticker}"
+        resp = requests.get(url, headers=_NAVER_HEADERS, timeout=5)
+        resp.encoding = "euc-kr"
+        soup = BeautifulSoup(resp.text, "lxml")
+        h1 = soup.find("div", class_="wrap_company")
+        if h1:
+            a = h1.find("a")
+            if a:
+                return a.get_text(strip=True)
         return ticker
     except Exception:
         return ticker
