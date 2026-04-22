@@ -1,8 +1,9 @@
+import pandas as pd
 import streamlit as st
 
 from backtest import run_backtest
 from scanner import scan_day_trading, scan_swing
-from utils import get_last_trading_date
+from utils import get_last_trading_date, get_stock_news
 
 st.set_page_config(
     page_title="K-Quant Tracker",
@@ -11,9 +12,8 @@ st.set_page_config(
 )
 
 st.title("📈 K-Quant Tracker")
-st.caption("한국 주식 단기/스윙 종목 스캐너")
+st.caption("한국 주식 눌림목 + 수급 기반 종목 스캐너")
 
-# 사이드바 설정
 with st.sidebar:
     st.header("스캔 설정")
     market = st.selectbox("시장 선택", ["KOSPI", "KOSDAQ"], index=0)
@@ -25,8 +25,66 @@ with st.sidebar:
 tab_day, tab_swing, tab_backtest = st.tabs(["📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트"])
 
 
-def render_metric_cards(df: "pd.DataFrame", delta_col: str, label: str) -> None:
-    """상위 3종목 metric 카드 렌더링"""
+def render_stock_card(row: pd.Series) -> None:
+    """종목 카드: 매수가 / 현재가 / 익절가 / 손절가 / 수급 / 뉴스"""
+    expander_label = (
+        f"**{row['name']}** ({row['ticker']})"
+        f"  —  눌림 {row['pullback_pct']:+.1f}%"
+        f"  /  손익비 {row['risk_reward']}:1"
+    )
+    with st.expander(expander_label):
+        # 가격 4칸
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "매수 참고가 💰",
+            f"{row['buy_price']:,}원",
+            delta="다음날 시초가 ±1%",
+            delta_color="off",
+        )
+        c2.metric("현재가", f"{int(row['close']):,}원")
+        c3.metric(
+            "익절가 🎯",
+            f"{row['take_profit']:,}원",
+            delta=f"+{round((row['take_profit'] / row['close'] - 1) * 100, 1)}%",
+        )
+        c4.metric(
+            "손절가 🛑",
+            f"{row['stop_loss']:,}원",
+            delta=f"{round((row['stop_loss'] / row['close'] - 1) * 100, 1)}%",
+            delta_color="inverse",
+        )
+
+        st.divider()
+
+        # 수급 정보
+        inst_days = row.get("inst_days", 0)
+        foreign_days = row.get("foreign_days", 0)
+        if inst_days == 0 and foreign_days == 0:
+            st.caption("수급 데이터 미확인")
+        else:
+            col_i, col_f = st.columns(2)
+            col_i.info(f"🏦 기관 3일중 **{inst_days}일** 순매수")
+            col_f.info(f"🌍 외국인 3일중 **{foreign_days}일** 순매수")
+
+        st.caption(
+            f"거래량 비율: {row.get('vol_ratio', 0):.2f}배  |  "
+            f"눌림폭: {row['pullback_pct']:+.2f}%"
+        )
+
+        st.divider()
+
+        # 관련 뉴스
+        news_list = get_stock_news(row["ticker"])
+        if news_list:
+            st.markdown("**📰 관련 뉴스**")
+            for news in news_list:
+                st.markdown(f"- [{news['title']}]({news['url']}) `{news['date']}`")
+        else:
+            st.caption("뉴스 데이터 없음")
+
+
+def render_metric_cards(df: pd.DataFrame) -> None:
+    """상위 3종목 요약 카드"""
     top3 = df.head(3)
     cols = st.columns(len(top3))
     for col, (_, row) in zip(cols, top3.iterrows()):
@@ -34,25 +92,17 @@ def render_metric_cards(df: "pd.DataFrame", delta_col: str, label: str) -> None:
             st.metric(
                 label=row["name"],
                 value=f"{int(row['close']):,}원",
-                delta=f"{row[delta_col]}{label}",
+                delta=f"눌림 {row['pullback_pct']:+.1f}%",
             )
-
-
-def render_exit_guide(row: "pd.Series") -> None:
-    """개별 종목 익절/손절 가이드 인라인 표시"""
-    c1, c2, c3 = st.columns(3)
-    c1.metric("현재가", f"{int(row['close']):,}원")
-    c2.metric("익절가 🎯", f"{int(row['take_profit']):,}원",
-              delta=f"+{round((row['take_profit']/row['close']-1)*100, 1)}%")
-    c3.metric("손절가 🛑", f"{int(row['stop_loss']):,}원",
-              delta=f"{round((row['stop_loss']/row['close']-1)*100, 1)}%",
-              delta_color="inverse")
 
 
 # 단기 탭
 with tab_day:
-    st.subheader("거래량 급등 + RSI 반등 종목")
-    st.caption("조건: 거래량 200%↑ & RSI 30 상향돌파 & 양봉 마감 & 거래대금 10억↑ & 시총 300억↑")
+    st.subheader("단기 눌림목 종목")
+    st.caption(
+        "조건: 종가 > MA20 > MA60 & 최근 3일 중 하락 2일↑ & MA20 ±3% 이내 "
+        "& 거래량 감소 & 기관/외국인 3일중 2일↑ 순매수"
+    )
 
     if st.button("🔍 단기 스캔 시작", key="btn_day"):
         with st.spinner("스캔 중..."):
@@ -62,15 +112,14 @@ with tab_day:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
             st.success(f"{len(df_day)}개 종목 발견")
-            render_metric_cards(df_day, "volume_ratio", "배")
+            render_metric_cards(df_day)
 
             st.divider()
-            st.subheader("익절/손절 가이드 (ATR 기반)")
-            st.caption("익절: ATR×2 / 손절: ATR×1 / 손익비(R:R) 2 이상 권장")
+            st.subheader("종목별 상세 (매수가 / 익절 / 손절 / 수급 / 뉴스)")
+            st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
             for _, row in df_day.iterrows():
-                with st.expander(f"**{row['name']}** ({row['ticker']})  —  손익비 {row['risk_reward']}:1"):
-                    render_exit_guide(row)
+                render_stock_card(row)
 
             st.divider()
             st.subheader("전체 결과")
@@ -78,10 +127,12 @@ with tab_day:
                 df_day.rename(columns={
                     "ticker": "종목코드",
                     "name": "종목명",
+                    "buy_price": "매수참고가",
                     "close": "현재가",
-                    "volume_ratio": "거래량비율(배)",
-                    "rsi_prev": "전일RSI",
-                    "rsi_today": "당일RSI",
+                    "pullback_pct": "눌림(%)",
+                    "vol_ratio": "거래량비율",
+                    "inst_days": "기관순매수일",
+                    "foreign_days": "외국인순매수일",
                     "take_profit": "익절가",
                     "stop_loss": "손절가",
                     "risk_reward": "손익비",
@@ -93,8 +144,11 @@ with tab_day:
 
 # 스윙 탭
 with tab_swing:
-    st.subheader("골든크로스 종목")
-    st.caption("조건: MA5/MA20 골든크로스 & 거래대금 10억↑ & 시총 300억↑ (이격도 낮은 순 = 골든크로스 초기)")
+    st.subheader("스윙 눌림목 종목")
+    st.caption(
+        "조건: 종가 > MA60 > MA120 & 최근 5일 중 하락 3일↑ & MA60 ±3% 이내 "
+        "& 거래량 감소 & 기관/외국인 3일중 2일↑ 순매수"
+    )
 
     if st.button("🔍 스윙 스캔 시작", key="btn_swing"):
         with st.spinner("스캔 중... (전 종목 분석으로 수 분 소요될 수 있습니다)"):
@@ -104,15 +158,14 @@ with tab_swing:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
             st.success(f"{len(df_swing)}개 종목 발견")
-            render_metric_cards(df_swing, "ma_gap_pct", "%")
+            render_metric_cards(df_swing)
 
             st.divider()
-            st.subheader("익절/손절 가이드 (ATR 기반)")
-            st.caption("익절: ATR×3 / 손절: ATR×1.5 / 최대 보유 10거래일 권장")
+            st.subheader("종목별 상세 (매수가 / 익절 / 손절 / 수급 / 뉴스)")
+            st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
             for _, row in df_swing.iterrows():
-                with st.expander(f"**{row['name']}** ({row['ticker']})  —  MA 이격도 {row['ma_gap_pct']}%"):
-                    render_exit_guide(row)
+                render_stock_card(row)
 
             st.divider()
             st.subheader("전체 결과")
@@ -120,10 +173,14 @@ with tab_swing:
                 df_swing.rename(columns={
                     "ticker": "종목코드",
                     "name": "종목명",
+                    "buy_price": "매수참고가",
                     "close": "현재가",
-                    "ma5": "MA5",
-                    "ma20": "MA20",
-                    "ma_gap_pct": "MA이격도(%)",
+                    "pullback_pct": "눌림(%)",
+                    "vol_ratio": "거래량비율",
+                    "inst_days": "기관순매수일",
+                    "foreign_days": "외국인순매수일",
+                    "ma60": "MA60",
+                    "ma120": "MA120",
                     "take_profit": "익절가",
                     "stop_loss": "손절가",
                     "risk_reward": "손익비",
@@ -135,12 +192,17 @@ with tab_swing:
 # 백테스트 탭
 with tab_backtest:
     st.subheader("전략 백테스트")
-    st.caption(f"시총 상위 150개 종목 대상 / 신호 발생 다음날 시가 매수 / 익절·손절·기간만료 시 청산")
+    st.caption(
+        f"시총 300억↑ 종목 랜덤 {200}개 대상 / 신호 발생 다음날 시가(+슬리피지 0.1%) 매수 / "
+        "익절·손절·기간만료 시 청산 / 복리 MDD 기준"
+    )
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        bt_strategy = st.selectbox("전략", ["day", "swing"],
-                                   format_func=lambda x: "단기 (당일)" if x == "day" else "스윙 (1주일)")
+        bt_strategy = st.selectbox(
+            "전략", ["day", "swing"],
+            format_func=lambda x: "단기 눌림목(MA20)" if x == "day" else "스윙 눌림목(MA60)"
+        )
     with col2:
         bt_months = st.selectbox("기간", [1, 3, 6], index=1, format_func=lambda x: f"{x}개월")
     with col3:
@@ -152,7 +214,7 @@ with tab_backtest:
         st.info("익절 +7% / 손절 -3% / 최대 보유 10거래일")
 
     if st.button("🔬 백테스트 실행", key="btn_backtest"):
-        with st.spinner(f"백테스트 중... ({bt_months}개월 / 시총 상위 150종목)"):
+        with st.spinner(f"백테스트 중... ({bt_months}개월 / 랜덤 200종목)"):
             result = run_backtest(bt_strategy, bt_months, bt_market)
 
         if not result:
@@ -161,7 +223,6 @@ with tab_backtest:
             win_rate = result["승률(%)"]
             expectancy = result["기대값(%)"]
 
-            # 승률 등급 표시
             if win_rate >= 70:
                 st.success(f"승률 {win_rate}% — 목표 달성 ✅")
             elif win_rate >= 60:
@@ -172,9 +233,12 @@ with tab_backtest:
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("총 거래수", result["총 거래수"])
             m2.metric("승률", f"{win_rate}%")
-            m3.metric("기대값", f"{expectancy}%",
-                      delta="양수=수익" if expectancy > 0 else "음수=손실",
-                      delta_color="normal" if expectancy > 0 else "inverse")
+            m3.metric(
+                "기대값",
+                f"{expectancy}%",
+                delta="양수=수익" if expectancy > 0 else "음수=손실",
+                delta_color="normal" if expectancy > 0 else "inverse",
+            )
             m4.metric("MDD", f"{result['MDD(%)']}%", delta_color="inverse")
 
             st.divider()
@@ -186,9 +250,7 @@ with tab_backtest:
                 st.metric("평균 손실(손절+만료)", f"{result['평균 손실(%)']}%")
                 st.metric("손절+만료 횟수", result["손절+만료"])
 
-            # 트레이드 상세 내역
             if result.get("trades"):
-                import pandas as pd
                 with st.expander("트레이드 상세 내역 보기"):
                     df_trades = pd.DataFrame(result["trades"])
                     st.dataframe(

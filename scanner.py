@@ -6,10 +6,9 @@ import streamlit as st
 from utils import (
     add_atr,
     add_moving_averages,
-    add_rsi,
+    get_investor_flow,
     get_ohlcv,
     get_stock_listing,
-    get_ticker_name,
 )
 
 MIN_MARKET_CAP = 30_000_000_000   # 시가총액 300억 하한선
@@ -19,6 +18,9 @@ DAY_TP_MULT = 2.0
 DAY_SL_MULT = 1.0
 SWING_TP_MULT = 3.0
 SWING_SL_MULT = 1.5
+
+# 눌림목 허용 범위: MA 기준 ±3%
+PULLBACK_BAND = 0.03
 
 
 def calc_net_profit(buy: float, sell: float, qty: int) -> float:
@@ -30,13 +32,6 @@ def _get_date_range(end_date: str, days: int = 60) -> str:
     return (datetime.strptime(end_date, "%Y%m%d") - timedelta(days=days)).strftime("%Y%m%d")
 
 
-def _get_prev_date(date: str) -> str:
-    dt = datetime.strptime(date, "%Y%m%d") - timedelta(days=1)
-    while dt.weekday() >= 5:
-        dt -= timedelta(days=1)
-    return dt.strftime("%Y%m%d")
-
-
 def _calc_exit_prices(close: float, atr: float, tp_mult: float, sl_mult: float) -> tuple[int, int, float]:
     tp = close + atr * tp_mult
     sl = close - atr * sl_mult
@@ -44,76 +39,103 @@ def _calc_exit_prices(close: float, atr: float, tp_mult: float, sl_mult: float) 
     return int(tp), int(sl), rr
 
 
+def _count_down_days(df: pd.DataFrame, window: int) -> int:
+    """최근 window일 중 하락일(종가 < 전일 종가) 수"""
+    closes = df["종가"].iloc[-(window + 1):]
+    return sum(
+        1 for i in range(1, len(closes))
+        if closes.iloc[i] < closes.iloc[i - 1]
+    )
+
+
 def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
     """
-    단기 종목 스캔
-    1단계: 오늘 전체 종목 스냅샷 → 시총/거래대금/양봉 필터
-    2단계: 필터된 종목에 개별 OHLCV → 거래량 비율 + RSI 30 상향돌파
+    단기 눌림목 스캔 (MA20 기준)
+    ① 종가 > MA20 > MA60 (단기 상승 추세)
+    ② 최근 3일 중 하락일 >= 2 (눌림 발생)
+    ③ 종가가 MA20 ±3% 이내 (지지선 근처)
+    ④ 3일 평균 거래량 < 20일 평균 × 0.7 (매도 압력 약화)
+    ⑤ 기관 OR 외국인 최근 3일 중 순매수 >= 2일
     """
     df_listing = get_stock_listing(market)
     if df_listing.empty:
         return pd.DataFrame()
 
-    # 1단계: 기본 필터 (시총/거래대금/양봉)
     candidates = df_listing[
         (df_listing["market_cap"] >= MIN_MARKET_CAP) &
-        (df_listing["거래대금"] >= MIN_TRADE_AMOUNT) &
-        (df_listing["종가"] > df_listing["시가"])
+        (df_listing["거래대금"] >= MIN_TRADE_AMOUNT)
     ].copy()
 
     if candidates.empty:
         return pd.DataFrame()
 
     results: list[dict] = []
-    progress = st.progress(0, text="종목 분석 중...")
+    progress = st.progress(0, text="단기 눌림목 스캔 중...")
     tickers = candidates.index.tolist()
+    start = _get_date_range(date, days=150)  # MA60 확보
 
     for i, ticker in enumerate(tickers):
-        progress.progress((i + 1) / len(tickers), text=f"분석 중: {ticker}")
+        progress.progress((i + 1) / len(tickers), text=f"분석 중: {ticker} ({i+1}/{len(tickers)})")
 
-        start = _get_date_range(date, days=60)
-        df_ohlcv = get_ohlcv(ticker, start, date)
-
-        if len(df_ohlcv) < 20:
+        df = get_ohlcv(ticker, start, date)
+        if len(df) < 65:
             continue
 
-        # 거래량 비율: 당일 vs 전일
-        if len(df_ohlcv) < 2:
-            continue
-        vol_today = df_ohlcv["거래량"].iloc[-1]
-        vol_prev = df_ohlcv["거래량"].iloc[-2]
-        if vol_prev == 0:
-            continue
-        volume_ratio = vol_today / vol_prev
-        if volume_ratio < 2.0:
+        df = add_moving_averages(df)
+        df = add_atr(df)
+        df = df.dropna(subset=["MA20", "MA60", "ATR"])
+
+        if len(df) < 5:
             continue
 
-        df_ohlcv = add_rsi(df_ohlcv)
-        df_ohlcv = add_atr(df_ohlcv)
-        df_ohlcv = df_ohlcv.dropna(subset=["RSI", "ATR"])
+        close = df["종가"].iloc[-1]
+        ma20 = df["MA20"].iloc[-1]
+        ma60 = df["MA60"].iloc[-1]
 
-        if len(df_ohlcv) < 2:
+        # ① 단기 상승 추세
+        if not (close > ma20 > ma60):
             continue
 
-        rsi_today = df_ohlcv["RSI"].iloc[-1]
-        rsi_prev = df_ohlcv["RSI"].iloc[-2]
-
-        # RSI 30 상향 돌파
-        if not (rsi_prev < 30 and rsi_today > 30):
+        # ② 최근 3일 중 하락일 >= 2
+        if len(df) < 4:
+            continue
+        if _count_down_days(df, window=3) < 2:
             continue
 
-        close = int(candidates.loc[ticker, "종가"])
-        atr = df_ohlcv["ATR"].iloc[-1]
+        # ③ MA20 ±3% 이내
+        pullback_pct = (close - ma20) / ma20 * 100
+        if not (-PULLBACK_BAND * 100 <= pullback_pct <= PULLBACK_BAND * 100):
+            continue
+
+        # ④ 거래량 감소
+        vol_3d = df["거래량"].iloc[-3:].mean()
+        vol_20d = df["거래량"].iloc[-20:].mean()
+        if vol_20d == 0 or vol_3d >= vol_20d * 0.7:
+            continue
+
+        # ⑤ 수급 필터
+        flow = get_investor_flow(ticker)
+        inst_days = 0
+        foreign_days = 0
+        if flow is not None:
+            inst_days = flow["기관_순매수일"]
+            foreign_days = flow["외국인_순매수일"]
+            if inst_days < 2 and foreign_days < 2:
+                continue
+
+        atr = df["ATR"].iloc[-1]
         tp, sl, rr = _calc_exit_prices(close, atr, DAY_TP_MULT, DAY_SL_MULT)
         net_profit_pct = round(calc_net_profit(close, tp, 1) / close * 100, 2)
 
         results.append({
             "ticker": ticker,
             "name": candidates.loc[ticker, "name"],
-            "close": close,
-            "volume_ratio": round(volume_ratio, 2),
-            "rsi_prev": round(rsi_prev, 1),
-            "rsi_today": round(rsi_today, 1),
+            "buy_price": int(close),
+            "close": int(close),
+            "pullback_pct": round(pullback_pct, 2),
+            "vol_ratio": round(vol_3d / vol_20d, 2),
+            "inst_days": inst_days,
+            "foreign_days": foreign_days,
             "take_profit": tp,
             "stop_loss": sl,
             "risk_reward": rr,
@@ -125,68 +147,98 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    return pd.DataFrame(results).sort_values("volume_ratio", ascending=False).reset_index(drop=True)
+    df_result = pd.DataFrame(results)
+    df_result["abs_pullback"] = df_result["pullback_pct"].abs()
+    return df_result.sort_values("abs_pullback").drop(columns="abs_pullback").reset_index(drop=True)
 
 
 def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
     """
-    스윙 종목 스캔
-    조건: MA5/MA20 골든크로스 + 거래대금 10억↑ + 시총 300억↑
-    수급 데이터 없이 기술적 조건만으로 스캔
+    스윙 눌림목 스캔 (MA60 기준)
+    ① 종가 > MA60 > MA120 (중기 상승 추세)
+    ② 최근 5일 중 하락일 >= 3 (눌림 발생)
+    ③ 종가가 MA60 ±3% 이내 (지지선 근처)
+    ④ 5일 평균 거래량 < 20일 평균 × 0.7 (매도 압력 약화)
+    ⑤ 기관 OR 외국인 최근 3일 중 순매수 >= 2일
     """
     df_listing = get_stock_listing(market)
     if df_listing.empty:
         return pd.DataFrame()
 
-    # 시총/거래대금 필터
     candidates = df_listing[
         (df_listing["market_cap"] >= MIN_MARKET_CAP) &
         (df_listing["거래대금"] >= MIN_TRADE_AMOUNT)
     ].copy()
 
-    tickers = candidates.index.tolist()
-    start = _get_date_range(end_date, days=60)
+    if candidates.empty:
+        return pd.DataFrame()
 
     results: list[dict] = []
-    progress = st.progress(0, text="스윙 스캔 중...")
+    progress = st.progress(0, text="스윙 눌림목 스캔 중...")
+    tickers = candidates.index.tolist()
+    start = _get_date_range(end_date, days=250)  # MA120 확보
 
     for i, ticker in enumerate(tickers):
-        progress.progress((i + 1) / len(tickers), text=f"분석 중: {ticker}")
+        progress.progress((i + 1) / len(tickers), text=f"분석 중: {ticker} ({i+1}/{len(tickers)})")
 
-        df_ohlcv = get_ohlcv(ticker, start, end_date)
-        if len(df_ohlcv) < 25:
+        df = get_ohlcv(ticker, start, end_date)
+        if len(df) < 125:
             continue
 
-        df_ohlcv = add_moving_averages(df_ohlcv)
-        df_ohlcv = add_atr(df_ohlcv)
-        df_ohlcv = df_ohlcv.dropna(subset=["MA5", "MA20", "ATR"])
+        df = add_moving_averages(df)
+        df = add_atr(df)
+        df = df.dropna(subset=["MA60", "MA120", "ATR"])
 
-        if len(df_ohlcv) < 2:
+        if len(df) < 7:
             continue
 
-        ma5_today = df_ohlcv["MA5"].iloc[-1]
-        ma20_today = df_ohlcv["MA20"].iloc[-1]
-        ma5_prev = df_ohlcv["MA5"].iloc[-2]
-        ma20_prev = df_ohlcv["MA20"].iloc[-2]
+        close = df["종가"].iloc[-1]
+        ma60 = df["MA60"].iloc[-1]
+        ma120 = df["MA120"].iloc[-1]
 
-        # 골든크로스
-        if not (ma5_prev < ma20_prev and ma5_today > ma20_today):
+        # ① 중기 상승 추세
+        if not (close > ma60 > ma120):
             continue
 
-        close = int(df_ohlcv["종가"].iloc[-1])
-        atr = df_ohlcv["ATR"].iloc[-1]
+        # ② 최근 5일 중 하락일 >= 3
+        if _count_down_days(df, window=5) < 3:
+            continue
+
+        # ③ MA60 ±3% 이내
+        pullback_pct = (close - ma60) / ma60 * 100
+        if not (-PULLBACK_BAND * 100 <= pullback_pct <= PULLBACK_BAND * 100):
+            continue
+
+        # ④ 거래량 감소
+        vol_5d = df["거래량"].iloc[-5:].mean()
+        vol_20d = df["거래량"].iloc[-20:].mean()
+        if vol_20d == 0 or vol_5d >= vol_20d * 0.7:
+            continue
+
+        # ⑤ 수급 필터
+        flow = get_investor_flow(ticker)
+        inst_days = 0
+        foreign_days = 0
+        if flow is not None:
+            inst_days = flow["기관_순매수일"]
+            foreign_days = flow["외국인_순매수일"]
+            if inst_days < 2 and foreign_days < 2:
+                continue
+
+        atr = df["ATR"].iloc[-1]
         tp, sl, rr = _calc_exit_prices(close, atr, SWING_TP_MULT, SWING_SL_MULT)
-
-        # 이격도: MA5와 MA20의 간격 (%)
-        ma_gap_pct = round((ma5_today - ma20_today) / ma20_today * 100, 2)
 
         results.append({
             "ticker": ticker,
             "name": candidates.loc[ticker, "name"],
-            "close": close,
-            "ma5": int(ma5_today),
-            "ma20": int(ma20_today),
-            "ma_gap_pct": ma_gap_pct,
+            "buy_price": int(close),
+            "close": int(close),
+            "pullback_pct": round(pullback_pct, 2),
+            "vol_ratio": round(vol_5d / vol_20d, 2),
+            "inst_days": inst_days,
+            "foreign_days": foreign_days,
+            "ma60": int(ma60),
+            "ma120": int(ma120),
             "take_profit": tp,
             "stop_loss": sl,
             "risk_reward": rr,
@@ -197,4 +249,6 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    return pd.DataFrame(results).sort_values("ma_gap_pct", ascending=True).reset_index(drop=True)
+    df_result = pd.DataFrame(results)
+    df_result["abs_pullback"] = df_result["pullback_pct"].abs()
+    return df_result.sort_values("abs_pullback").drop(columns="abs_pullback").reset_index(drop=True)
