@@ -2,7 +2,6 @@ from datetime import datetime, timedelta
 
 import FinanceDataReader as fdr
 import pandas as pd
-import pandas_ta as ta
 import requests
 import streamlit as st
 from bs4 import BeautifulSoup
@@ -212,14 +211,24 @@ def add_moving_averages(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def add_rsi(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """RSI 컬럼 추가"""
+    """RSI 컬럼 추가 (Wilder 방식, pandas-ta 불필요)"""
     df = df.copy()
-    df["RSI"] = ta.rsi(df["종가"], length=period)
+    delta = df["종가"].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
     return df
 
 
 def add_atr(df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """ATR 컬럼 추가 — 변동성 기반 익절/손절 계산에 사용"""
+    """ATR 컬럼 추가 — 변동성 기반 익절/손절 계산 (pandas-ta 불필요)"""
     df = df.copy()
-    df["ATR"] = ta.atr(df["고가"], df["저가"], df["종가"], length=period)
+    high_low = df["고가"] - df["저가"]
+    high_prev = (df["고가"] - df["종가"].shift()).abs()
+    low_prev = (df["저가"] - df["종가"].shift()).abs()
+    true_range = pd.concat([high_low, high_prev, low_prev], axis=1).max(axis=1)
+    df["ATR"] = true_range.ewm(com=period - 1, min_periods=period).mean()
     return df
