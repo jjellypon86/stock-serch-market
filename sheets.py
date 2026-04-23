@@ -75,8 +75,9 @@ def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: s
 
 
 def _next_trading_day(date_str: str) -> str:
-    """YYYY-MM-DD 형식 날짜의 다음 거래일 반환"""
-    d = datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)
+    """날짜 문자열(YYYYMMDD 또는 YYYY-MM-DD)의 다음 거래일 반환"""
+    fmt = "%Y%m%d" if "-" not in date_str else "%Y-%m-%d"
+    d = datetime.strptime(date_str, fmt) + timedelta(days=1)
     while d.weekday() >= 5:
         d += timedelta(days=1)
     return d.strftime("%Y-%m-%d")

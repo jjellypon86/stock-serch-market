@@ -25,6 +25,11 @@ with st.sidebar:
     date_str = scan_date.strftime("%Y%m%d") if scan_date else default_date
     st.caption(f"조회 기준일: {date_str[:4]}.{date_str[4:6]}.{date_str[6:]}")
 
+if "df_day" not in st.session_state:
+    st.session_state.df_day = pd.DataFrame()
+if "df_swing" not in st.session_state:
+    st.session_state.df_swing = pd.DataFrame()
+
 tab_day, tab_swing, tab_backtest, tab_verify = st.tabs([
     "📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트", "📈 검증"
 ])
@@ -142,43 +147,45 @@ with tab_day:
                 " — 지수 하락 구간. 개별 신호 신뢰도 낮을 수 있음"
             )
         with st.spinner("스캔 중..."):
-            df_day = scan_day_trading(date_str, market)
-
-        if df_day.empty:
+            st.session_state.df_day = scan_day_trading(date_str, market)
+        if st.session_state.df_day.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            saved = save_scan_results(df_day, "day", market, date_str)
+            saved = save_scan_results(st.session_state.df_day, "day", market, date_str)
             if saved:
-                st.success(f"베스트 {len(df_day)}개 최종 추천 — Google Sheets 저장 완료")
+                st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천 — Google Sheets 저장 완료")
             else:
-                st.success(f"베스트 {len(df_day)}개 최종 추천")
-            render_metric_cards(df_day)
+                st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천")
 
-            st.divider()
-            st.subheader("베스트 3 최종 추천 상세")
-            st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
+    df_day = st.session_state.df_day
+    if not df_day.empty:
+        render_metric_cards(df_day)
 
-            for _, row in df_day.iterrows():
-                render_stock_card(row)
+        st.divider()
+        st.subheader("베스트 3 최종 추천 상세")
+        st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
-            st.divider()
-            st.subheader("선정 결과")
-            df_day_display = df_day.rename(columns={
-                "ticker": "종목코드", "name": "종목명",
-                "buy_price": "매수참고가", "close": "현재가",
-                "pullback_pct": "눌림(%)", "vol_ratio": "거래량비율",
-                "inst_days": "기관순매수일", "foreign_days": "외국인순매수일",
-                "take_profit": "익절가", "stop_loss": "손절가",
-                "risk_reward": "손익비", "net_profit_pct": "예상수익률(%)",
-            })
-            st.dataframe(
-                df_day_display.style.format({
-                    "매수참고가": "{:,}", "현재가": "{:,}",
-                    "익절가": "{:,}", "손절가": "{:,}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+        for _, row in df_day.iterrows():
+            render_stock_card(row)
+
+        st.divider()
+        st.subheader("선정 결과")
+        df_day_display = df_day.rename(columns={
+            "ticker": "종목코드", "name": "종목명",
+            "buy_price": "매수참고가", "close": "현재가",
+            "pullback_pct": "눌림(%)", "vol_ratio": "거래량비율",
+            "inst_days": "기관순매수일", "foreign_days": "외국인순매수일",
+            "take_profit": "익절가", "stop_loss": "손절가",
+            "risk_reward": "손익비", "net_profit_pct": "예상수익률(%)",
+        })
+        st.dataframe(
+            df_day_display.style.format({
+                "매수참고가": "{:,}", "현재가": "{:,}",
+                "익절가": "{:,}", "손절가": "{:,}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 # 스윙 탭
 with tab_swing:
@@ -219,45 +226,47 @@ with tab_swing:
                 " — 지수 하락 구간. 개별 신호 신뢰도 낮을 수 있음"
             )
         with st.spinner("스캔 중... (전 종목 분석으로 수 분 소요될 수 있습니다)"):
-            df_swing = scan_swing(date_str, market)
-
-        if df_swing.empty:
+            st.session_state.df_swing = scan_swing(date_str, market)
+        if st.session_state.df_swing.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            saved = save_scan_results(df_swing, "swing", market, date_str)
+            saved = save_scan_results(st.session_state.df_swing, "swing", market, date_str)
             if saved:
-                st.success(f"베스트 {len(df_swing)}개 최종 추천 — Google Sheets 저장 완료")
+                st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천 — Google Sheets 저장 완료")
             else:
-                st.success(f"베스트 {len(df_swing)}개 최종 추천")
-            render_metric_cards(df_swing)
+                st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천")
 
-            st.divider()
-            st.subheader("베스트 3 최종 추천 상세")
-            st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
+    df_swing = st.session_state.df_swing
+    if not df_swing.empty:
+        render_metric_cards(df_swing)
 
-            for _, row in df_swing.iterrows():
-                render_stock_card(row)
+        st.divider()
+        st.subheader("베스트 3 최종 추천 상세")
+        st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
-            st.divider()
-            st.subheader("선정 결과")
-            df_swing_display = df_swing.rename(columns={
-                "ticker": "종목코드", "name": "종목명",
-                "buy_price": "매수참고가", "close": "현재가",
-                "pullback_pct": "눌림(%)", "vol_ratio": "거래량비율",
-                "inst_days": "기관순매수일", "foreign_days": "외국인순매수일",
-                "ma60": "MA60", "ma120": "MA120",
-                "take_profit": "익절가", "stop_loss": "손절가",
-                "risk_reward": "손익비",
-            })
-            st.dataframe(
-                df_swing_display.style.format({
-                    "매수참고가": "{:,}", "현재가": "{:,}",
-                    "MA60": "{:,}", "MA120": "{:,}",
-                    "익절가": "{:,}", "손절가": "{:,}",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+        for _, row in df_swing.iterrows():
+            render_stock_card(row)
+
+        st.divider()
+        st.subheader("선정 결과")
+        df_swing_display = df_swing.rename(columns={
+            "ticker": "종목코드", "name": "종목명",
+            "buy_price": "매수참고가", "close": "현재가",
+            "pullback_pct": "눌림(%)", "vol_ratio": "거래량비율",
+            "inst_days": "기관순매수일", "foreign_days": "외국인순매수일",
+            "ma60": "MA60", "ma120": "MA120",
+            "take_profit": "익절가", "stop_loss": "손절가",
+            "risk_reward": "손익비",
+        })
+        st.dataframe(
+            df_swing_display.style.format({
+                "매수참고가": "{:,}", "현재가": "{:,}",
+                "MA60": "{:,}", "MA120": "{:,}",
+                "익절가": "{:,}", "손절가": "{:,}",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 # 백테스트 탭
 with tab_backtest:
