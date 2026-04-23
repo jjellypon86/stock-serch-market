@@ -197,5 +197,52 @@ def load_history() -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def evaluate_strategy(df_done: pd.DataFrame) -> dict:
+    """완료 거래 DataFrame(30건+) → 0~100점 채점 및 판정 반환"""
+    total = len(df_done)
+    df = df_done.copy()
+    df["profit_pct"] = pd.to_numeric(df["profit_pct"], errors="coerce").fillna(0)
+
+    wins   = (df["result"] == "WIN").sum()
+    losses = df[df["result"].isin(["LOSS", "EXPIRED"])]
+
+    win_rate = wins / total * 100
+    ev       = df["profit_pct"].mean()
+
+    cum   = (1 + df["profit_pct"] / 100).cumprod()
+    mdd   = ((cum - cum.cummax()) / cum.cummax()).min() * 100
+
+    avg_win  = df[df["result"] == "WIN"]["profit_pct"].mean() if wins > 0 else 0.0
+    avg_loss = abs(losses["profit_pct"].mean()) if len(losses) > 0 else 0.0
+    pl_ratio = avg_win / avg_loss if avg_loss > 0 else 0.0
+
+    wr_score  = 30 if win_rate >= 70 else 20 if win_rate >= 60 else 10 if win_rate >= 50 else 0
+    ev_score  = 30 if ev >= 1.0      else 20 if ev >= 0.0       else 10 if ev >= -1.0     else 0
+    mdd_score = 20 if mdd >= -10     else 10 if mdd >= -20      else 0
+    pl_score  = 20 if pl_ratio >= 1.5 else 10 if pl_ratio >= 1.0 else 0
+
+    score   = wr_score + ev_score + mdd_score + pl_score
+    verdict = "합격" if score >= 80 else "경고" if score >= 60 else "재검토"
+
+    weak_points: list[str] = []
+    if wr_score  < 30: weak_points.append(f"승률 70% 미달 (현재 {win_rate:.1f}%)")
+    if ev_score  < 30: weak_points.append(f"기대값 +1% 미달 (현재 {ev:.2f}%)")
+    if mdd_score < 20: weak_points.append(f"MDD -10% 초과 (현재 {mdd:.1f}%)")
+    if pl_score  < 20: weak_points.append(f"손익비 1.5 미달 (현재 {pl_ratio:.2f})")
+
+    return {
+        "score": score,
+        "verdict": verdict,
+        "breakdown": {
+            "win_rate":       {"value": round(win_rate, 1), "score": wr_score,  "max": 30},
+            "expected_value": {"value": round(ev, 2),       "score": ev_score,  "max": 30},
+            "mdd":            {"value": round(mdd, 1),      "score": mdd_score, "max": 20},
+            "pl_ratio":       {"value": round(pl_ratio, 2), "score": pl_score,  "max": 20},
+        },
+        "weak_points": weak_points,
+        "sample_size": total,
+    }
+
+
 def is_configured() -> bool:
     return _is_configured()

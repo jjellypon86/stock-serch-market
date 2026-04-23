@@ -5,7 +5,7 @@ import streamlit as st
 
 from backtest import run_backtest
 from scanner import scan_day_trading, scan_swing
-from sheets import is_configured, load_history, save_scan_results, update_results
+from sheets import evaluate_strategy, is_configured, load_history, save_scan_results, update_results
 from utils import get_last_trading_date, get_stock_news
 
 st.set_page_config(
@@ -89,8 +89,8 @@ def render_stock_card(row: pd.Series) -> None:
 
 
 def render_metric_cards(df: pd.DataFrame) -> None:
-    """상위 3종목 요약 카드"""
-    top3 = df.head(3)
+    """베스트 2 요약 카드"""
+    top3 = df.head(2)
     cols = st.columns(len(top3))
     for col, (_, row) in zip(cols, top3.iterrows()):
         with col:
@@ -118,20 +118,20 @@ with tab_day:
         else:
             saved = save_scan_results(df_day, "day", market, date_str)
             if saved:
-                st.success(f"{len(df_day)}개 종목 발견 — Google Sheets 저장 완료")
+                st.success(f"베스트 {len(df_day)}개 최종 추천 — Google Sheets 저장 완료")
             else:
-                st.success(f"{len(df_day)}개 종목 발견")
+                st.success(f"베스트 {len(df_day)}개 최종 추천")
             render_metric_cards(df_day)
 
             st.divider()
-            st.subheader("종목별 상세 (매수가 / 익절 / 손절 / 수급 / 뉴스)")
+            st.subheader("베스트 2 최종 추천 상세")
             st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
             for _, row in df_day.iterrows():
                 render_stock_card(row)
 
             st.divider()
-            st.subheader("전체 결과")
+            st.subheader("선정 결과")
             st.dataframe(
                 df_day.rename(columns={
                     "ticker": "종목코드",
@@ -168,20 +168,20 @@ with tab_swing:
         else:
             saved = save_scan_results(df_swing, "swing", market, date_str)
             if saved:
-                st.success(f"{len(df_swing)}개 종목 발견 — Google Sheets 저장 완료")
+                st.success(f"베스트 {len(df_swing)}개 최종 추천 — Google Sheets 저장 완료")
             else:
-                st.success(f"{len(df_swing)}개 종목 발견")
+                st.success(f"베스트 {len(df_swing)}개 최종 추천")
             render_metric_cards(df_swing)
 
             st.divider()
-            st.subheader("종목별 상세 (매수가 / 익절 / 손절 / 수급 / 뉴스)")
+            st.subheader("베스트 2 최종 추천 상세")
             st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
             for _, row in df_swing.iterrows():
                 render_stock_card(row)
 
             st.divider()
-            st.subheader("전체 결과")
+            st.subheader("선정 결과")
             st.dataframe(
                 df_swing.rename(columns={
                     "ticker": "종목코드",
@@ -326,6 +326,38 @@ with tab_verify:
                     ca2.metric("실거래 승률", f"{wr_a}%")
                     ca3.metric("실거래 기대값", f"{expect_a}%",
                                delta_color="normal" if expect_a > 0 else "inverse")
+
+            st.divider()
+            st.subheader("전략 자가 진단")
+
+            for strategy_name, strategy_label in [("day", "단기"), ("swing", "스윙")]:
+                df_strat = df_done[df_done["strategy"] == strategy_name].copy()
+                n = len(df_strat)
+                st.markdown(f"**{strategy_label} 전략** — {n}건 완료")
+                if n < 30:
+                    st.info(f"판단 시작까지 {30 - n}건 더 필요 (최소 30건)")
+                    continue
+
+                diag = evaluate_strategy(df_strat)
+                score   = diag["score"]
+                verdict = diag["verdict"]
+
+                col_score, col_bars = st.columns([1, 2])
+                with col_score:
+                    delta_txt = "✅ 합격" if verdict == "합격" else ("⚠️ 경고" if verdict == "경고" else "❌ 재검토")
+                    delta_clr = "normal" if verdict == "합격" else ("off" if verdict == "경고" else "inverse")
+                    st.metric("종합 점수", f"{score}점", delta=delta_txt, delta_color=delta_clr)
+
+                with col_bars:
+                    bd = diag["breakdown"]
+                    for label, key in [("승률", "win_rate"), ("기대값", "expected_value"), ("MDD", "mdd"), ("손익비", "pl_ratio")]:
+                        item = bd[key]
+                        st.caption(f"{label}  {item['score']}/{item['max']}점  (현재 {item['value']})")
+                        st.progress(item["score"] / item["max"] if item["max"] > 0 else 0)
+
+                if diag["weak_points"]:
+                    msg = "  \n".join(f"• {p}" for p in diag["weak_points"])
+                    st.error(msg) if verdict == "재검토" else st.warning(msg)
 
             st.divider()
             st.subheader("추천 히스토리")

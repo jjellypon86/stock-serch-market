@@ -24,6 +24,19 @@ SWING_SL_MULT = 1.5
 PULLBACK_BAND = 0.03
 
 
+def _select_best2(df: pd.DataFrame) -> pd.DataFrame:
+    """수급(40%)·손익비(35%)·눌림률(25%) 가중 점수로 상위 2개 반환"""
+    if df.empty:
+        return df
+    df = df.copy()
+    df["_score"] = (
+        (df["inst_days"] + df["foreign_days"]) / 6 * 40
+        + df["risk_reward"].clip(upper=3.0) / 3.0 * 35
+        + (1 - df["pullback_pct"].abs() / 5.0).clip(lower=0) * 25
+    )
+    return df.nlargest(2, "_score").drop(columns="_score").reset_index(drop=True)
+
+
 def calc_net_profit(buy: float, sell: float, qty: int) -> float:
     """수수료(0.015%) + 거래세(0.2%) 반영 순수익"""
     return sell * qty * (1 - 0.00015 - 0.002) - buy * qty * (1 + 0.00015)
@@ -150,9 +163,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    df_result = pd.DataFrame(results)
-    df_result["abs_pullback"] = df_result["pullback_pct"].abs()
-    return df_result.sort_values("abs_pullback").drop(columns="abs_pullback").reset_index(drop=True)
+    return _select_best2(pd.DataFrame(results))
 
 
 def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
@@ -254,6 +265,4 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    df_result = pd.DataFrame(results)
-    df_result["abs_pullback"] = df_result["pullback_pct"].abs()
-    return df_result.sort_values("abs_pullback").drop(columns="abs_pullback").reset_index(drop=True)
+    return _select_best2(pd.DataFrame(results))
