@@ -38,21 +38,23 @@ def render_stock_card(row: pd.Series) -> None:
         f"  /  손익비 {row['risk_reward']}:1"
     )
     with st.expander(expander_label):
-        # 가격 4칸
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(
+        # 가격 2×2 배치 (숫자가 길어도 잘리지 않도록)
+        r1c1, r1c2 = st.columns(2)
+        r1c1.metric(
             "매수 참고가 💰",
             f"{row['buy_price']:,}원",
             delta="다음날 시초가 ±1%",
             delta_color="off",
         )
-        c2.metric("현재가", f"{int(row['close']):,}원")
-        c3.metric(
+        r1c2.metric("현재가", f"{int(row['close']):,}원")
+
+        r2c1, r2c2 = st.columns(2)
+        r2c1.metric(
             "익절가 🎯",
             f"{row['take_profit']:,}원",
             delta=f"+{round((row['take_profit'] / row['close'] - 1) * 100, 1)}%",
         )
-        c4.metric(
+        r2c2.metric(
             "손절가 🛑",
             f"{row['stop_loss']:,}원",
             delta=f"{round((row['stop_loss'] / row['close'] - 1) * 100, 1)}%",
@@ -161,20 +163,18 @@ with tab_day:
 
             st.divider()
             st.subheader("선정 결과")
+            df_day_display = df_day.rename(columns={
+                "ticker": "종목코드", "name": "종목명",
+                "buy_price": "매수참고가", "close": "현재가",
+                "pullback_pct": "눌림(%)", "vol_ratio": "거래량비율",
+                "inst_days": "기관순매수일", "foreign_days": "외국인순매수일",
+                "take_profit": "익절가", "stop_loss": "손절가",
+                "risk_reward": "손익비", "net_profit_pct": "예상수익률(%)",
+            })
             st.dataframe(
-                df_day.rename(columns={
-                    "ticker": "종목코드",
-                    "name": "종목명",
-                    "buy_price": "매수참고가",
-                    "close": "현재가",
-                    "pullback_pct": "눌림(%)",
-                    "vol_ratio": "거래량비율",
-                    "inst_days": "기관순매수일",
-                    "foreign_days": "외국인순매수일",
-                    "take_profit": "익절가",
-                    "stop_loss": "손절가",
-                    "risk_reward": "손익비",
-                    "net_profit_pct": "예상수익률(%)",
+                df_day_display.style.format({
+                    "매수참고가": "{:,}", "현재가": "{:,}",
+                    "익절가": "{:,}", "손절가": "{:,}",
                 }),
                 use_container_width=True,
                 hide_index=True,
@@ -240,21 +240,20 @@ with tab_swing:
 
             st.divider()
             st.subheader("선정 결과")
+            df_swing_display = df_swing.rename(columns={
+                "ticker": "종목코드", "name": "종목명",
+                "buy_price": "매수참고가", "close": "현재가",
+                "pullback_pct": "눌림(%)", "vol_ratio": "거래량비율",
+                "inst_days": "기관순매수일", "foreign_days": "외국인순매수일",
+                "ma60": "MA60", "ma120": "MA120",
+                "take_profit": "익절가", "stop_loss": "손절가",
+                "risk_reward": "손익비",
+            })
             st.dataframe(
-                df_swing.rename(columns={
-                    "ticker": "종목코드",
-                    "name": "종목명",
-                    "buy_price": "매수참고가",
-                    "close": "현재가",
-                    "pullback_pct": "눌림(%)",
-                    "vol_ratio": "거래량비율",
-                    "inst_days": "기관순매수일",
-                    "foreign_days": "외국인순매수일",
-                    "ma60": "MA60",
-                    "ma120": "MA120",
-                    "take_profit": "익절가",
-                    "stop_loss": "손절가",
-                    "risk_reward": "손익비",
+                df_swing_display.style.format({
+                    "매수참고가": "{:,}", "현재가": "{:,}",
+                    "MA60": "{:,}", "MA120": "{:,}",
+                    "익절가": "{:,}", "손절가": "{:,}",
                 }),
                 use_container_width=True,
                 hide_index=True,
