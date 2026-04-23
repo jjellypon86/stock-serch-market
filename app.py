@@ -344,7 +344,10 @@ with tab_verify:
         if st.button("🔄 결과 업데이트", key="btn_update"):
             with st.spinner("미완료 종목 결과 자동 판정 중..."):
                 n = update_results()
-            st.success(f"{n}개 종목 결과 업데이트 완료") if n > 0 else st.info("업데이트할 항목이 없습니다.")
+            if n > 0:
+                st.success(f"{n}개 종목 결과 업데이트 완료")
+            else:
+                st.info("업데이트할 항목이 없습니다.")
 
         df_hist = load_history()
 
