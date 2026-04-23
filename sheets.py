@@ -15,7 +15,7 @@ except ImportError:
 
 SHEET_NAME = "K-Quant Tracker"
 HIST_WS    = "history"
-SCOPES     = ["https://www.googleapis.com/auth/spreadsheets"]
+SCOPES     = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
 
 COLUMNS = [
     "scan_date", "strategy", "market", "ticker", "name",
