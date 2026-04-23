@@ -11,7 +11,7 @@ from utils import (
     get_stock_listing,
 )
 
-MIN_MARKET_CAP   = 30_000_000_000   # 시가총액 300억 하한선
+MIN_MARKET_CAP   = 100_000_000_000  # 시가총액 1000억 하한선 (소형주 수급 데이터 신뢰도)
 DAY_MIN_TRADE    = 5_000_000_000   # 단기 거래대금 50억↑
 SWING_MIN_TRADE  = 10_000_000_000  # 스윙 거래대금 100억↑
 
@@ -24,8 +24,8 @@ SWING_SL_MULT = 1.5
 PULLBACK_BAND = 0.03
 
 
-def _select_best2(df: pd.DataFrame) -> pd.DataFrame:
-    """수급(40%)·손익비(35%)·눌림률(25%) 가중 점수로 상위 2개 반환"""
+def _select_best3(df: pd.DataFrame) -> pd.DataFrame:
+    """수급(40%)·손익비(35%)·눌림률(25%) 가중 점수로 상위 3개 반환"""
     if df.empty:
         return df
     df = df.copy()
@@ -34,7 +34,7 @@ def _select_best2(df: pd.DataFrame) -> pd.DataFrame:
         + df["risk_reward"].clip(upper=3.0) / 3.0 * 35
         + (1 - df["pullback_pct"].abs() / 5.0).clip(lower=0) * 25
     )
-    return df.nlargest(2, "_score").drop(columns="_score").reset_index(drop=True)
+    return df.nlargest(3, "_score").drop(columns="_score").reset_index(drop=True)
 
 
 def calc_net_profit(buy: float, sell: float, qty: int) -> float:
@@ -163,7 +163,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    return _select_best2(pd.DataFrame(results))
+    return _select_best3(pd.DataFrame(results))
 
 
 def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
@@ -265,4 +265,4 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    return _select_best2(pd.DataFrame(results))
+    return _select_best3(pd.DataFrame(results))

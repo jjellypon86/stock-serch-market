@@ -243,6 +243,24 @@ def get_stock_news(ticker: str, count: int = 3) -> list[dict]:
         return []
 
 
+@st.cache_data(ttl=3600)
+def get_market_direction(date: str) -> dict:
+    """KOSPI 지수 MA20 대비 현재 위치 반환"""
+    start = (datetime.strptime(date, "%Y%m%d") - timedelta(days=60)).strftime("%Y%m%d")
+    df = get_ohlcv("^KS11", start, date)
+    if len(df) < 20:
+        return {"trend": "unknown", "kospi": 0, "ma20": 0, "gap_pct": 0.0}
+    kospi = float(df["종가"].iloc[-1])
+    ma20  = float(df["종가"].rolling(20).mean().iloc[-1])
+    gap_pct = round((kospi - ma20) / ma20 * 100, 2)
+    return {
+        "trend": "상승" if kospi >= ma20 else "하락",
+        "kospi": int(kospi),
+        "ma20": int(ma20),
+        "gap_pct": gap_pct,
+    }
+
+
 def add_moving_averages(df: pd.DataFrame) -> pd.DataFrame:
     """MA5, MA20, MA60, MA120 컬럼 추가"""
     df = df.copy()

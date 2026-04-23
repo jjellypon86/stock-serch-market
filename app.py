@@ -6,7 +6,7 @@ import streamlit as st
 from backtest import run_backtest
 from scanner import scan_day_trading, scan_swing
 from sheets import evaluate_strategy, is_configured, load_history, save_scan_results, update_results
-from utils import get_last_trading_date, get_stock_news
+from utils import get_last_trading_date, get_market_direction, get_stock_news
 
 st.set_page_config(
     page_title="K-Quant Tracker",
@@ -89,8 +89,8 @@ def render_stock_card(row: pd.Series) -> None:
 
 
 def render_metric_cards(df: pd.DataFrame) -> None:
-    """베스트 2 요약 카드"""
-    top3 = df.head(2)
+    """베스트 3 요약 카드"""
+    top3 = df.head(3)
     cols = st.columns(len(top3))
     for col, (_, row) in zip(cols, top3.iterrows()):
         with col:
@@ -133,6 +133,12 @@ with tab_day:
 
 
     if st.button("🔍 단기 스캔 시작", key="btn_day"):
+        mkt = get_market_direction(date_str)
+        if mkt["trend"] == "하락":
+            st.warning(
+                f"⚠️ KOSPI {mkt['kospi']:,} / MA20 {mkt['ma20']:,} ({mkt['gap_pct']:+.1f}%)"
+                " — 지수 하락 구간. 개별 신호 신뢰도 낮을 수 있음"
+            )
         with st.spinner("스캔 중..."):
             df_day = scan_day_trading(date_str, market)
 
@@ -147,7 +153,7 @@ with tab_day:
             render_metric_cards(df_day)
 
             st.divider()
-            st.subheader("베스트 2 최종 추천 상세")
+            st.subheader("베스트 3 최종 추천 상세")
             st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
             for _, row in df_day.iterrows():
@@ -206,6 +212,12 @@ with tab_swing:
 
 
     if st.button("🔍 스윙 스캔 시작", key="btn_swing"):
+        mkt = get_market_direction(date_str)
+        if mkt["trend"] == "하락":
+            st.warning(
+                f"⚠️ KOSPI {mkt['kospi']:,} / MA20 {mkt['ma20']:,} ({mkt['gap_pct']:+.1f}%)"
+                " — 지수 하락 구간. 개별 신호 신뢰도 낮을 수 있음"
+            )
         with st.spinner("스캔 중... (전 종목 분석으로 수 분 소요될 수 있습니다)"):
             df_swing = scan_swing(date_str, market)
 
@@ -220,7 +232,7 @@ with tab_swing:
             render_metric_cards(df_swing)
 
             st.divider()
-            st.subheader("베스트 2 최종 추천 상세")
+            st.subheader("베스트 3 최종 추천 상세")
             st.caption("매수 참고가 기준: 스캔 당일 종가 / 다음날 시초가 ±1% 이내 진입 권장")
 
             for _, row in df_swing.iterrows():
@@ -252,8 +264,8 @@ with tab_swing:
 with tab_backtest:
     st.subheader("전략 백테스트")
     st.caption(
-        f"시총 300억↑ 종목 랜덤 {200}개 대상 / 신호 발생 다음날 시가(+슬리피지 0.1%) 매수 / "
-        "익절·손절·기간만료 시 청산 / 복리 MDD 기준"
+        f"시총 1000억↑ 종목 고정 샘플 {200}개 대상 (random_state=42, 재현 가능) / "
+        "신호 발생 다음날 시가(+슬리피지 0.1%) 매수 / 익절·손절·기간만료 시 청산 / 복리 MDD 기준"
     )
 
     col1, col2, col3 = st.columns(3)
