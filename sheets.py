@@ -49,10 +49,10 @@ def _get_worksheet():
     return ws
 
 
-def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: str) -> bool:
-    """스캔 완료 즉시 Sheets에 추가. 결과 컬럼은 공란."""
+def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: str) -> tuple[bool, str]:
+    """스캔 완료 즉시 Sheets에 추가. 결과 컬럼은 공란. 반환: (성공여부, 에러메시지)"""
     if not _is_configured():
-        return False
+        return False, "gcp_service_account secrets 미설정"
     try:
         ws = _get_worksheet()
         rows = [
@@ -69,9 +69,9 @@ def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: s
             for _, r in df.iterrows()
         ]
         ws.append_rows(rows, value_input_option="USER_ENTERED")
-        return True
-    except Exception:
-        return False
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 def _next_trading_day(date_str: str) -> str:

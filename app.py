@@ -151,11 +151,13 @@ with tab_day:
         if st.session_state.df_day.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            saved = save_scan_results(st.session_state.df_day, "day", market, date_str)
+            saved, err = save_scan_results(st.session_state.df_day, "day", market, date_str)
             if saved:
                 st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천 — Google Sheets 저장 완료")
             else:
                 st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천")
+                if err:
+                    st.error(f"Sheets 저장 실패: {err}")
 
     df_day = st.session_state.df_day
     if not df_day.empty:
@@ -230,11 +232,13 @@ with tab_swing:
         if st.session_state.df_swing.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            saved = save_scan_results(st.session_state.df_swing, "swing", market, date_str)
+            saved, err = save_scan_results(st.session_state.df_swing, "swing", market, date_str)
             if saved:
                 st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천 — Google Sheets 저장 완료")
             else:
                 st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천")
+                if err:
+                    st.error(f"Sheets 저장 실패: {err}")
 
     df_swing = st.session_state.df_swing
     if not df_swing.empty:
