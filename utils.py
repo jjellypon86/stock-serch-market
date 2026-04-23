@@ -244,7 +244,7 @@ def get_stock_news(ticker: str, count: int = 3) -> list[dict]:
 
 
 @st.cache_data(ttl=3600)
-def get_market_direction(date: str) -> dict:
+def get_market_direction(date: str) -> dict[str, object]:
     """KOSPI 지수 MA20 대비 현재 위치 반환"""
     start = (datetime.strptime(date, "%Y%m%d") - timedelta(days=60)).strftime("%Y%m%d")
     df = get_ohlcv("^KS11", start, date)
