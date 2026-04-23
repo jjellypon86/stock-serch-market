@@ -58,7 +58,7 @@ def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: s
         rows = [
             [
                 scan_date, strategy, market,
-                str(r["ticker"]), r["name"],
+                str(r["ticker"]).zfill(6), r["name"],
                 int(r["buy_price"]), "",
                 int(r["take_profit"]), int(r["stop_loss"]),
                 float(r["risk_reward"]), round(float(r["pullback_pct"]), 2),
