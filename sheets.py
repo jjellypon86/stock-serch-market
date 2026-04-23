@@ -159,7 +159,15 @@ def update_results() -> int:
 
             strategy   = str(row.get("strategy", "day"))
             max_hold   = DAY_MAX_HOLD if strategy == "day" else SWING_MAX_HOLD
-            ticker     = str(row.get("ticker", ""))
+            # --- 여기서부터 수정 ---
+            raw_ticker = row.get("ticker", "")
+            try:
+                # 5930.0 같은 float 형태나 5930 같은 int 형태를 모두 '005930'으로 변환
+                ticker = str(int(float(raw_ticker))).zfill(6)
+            except (ValueError, TypeError):
+                # 데이터가 비어있거나 변환 불가능한 문자열일 경우 대비
+                ticker = str(raw_ticker).strip().zfill(6)
+            # --- 여기까지 수정 ---
             take_profit = float(row.get("take_profit", 0))
             stop_loss   = float(row.get("stop_loss", 0))
 
