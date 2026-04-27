@@ -1,0 +1,55 @@
+# K-Quant 전략 상수 관리
+# 각 모듈에서 yaml.safe_load()로 로드하여 사용
+
+market:
+  min_market_cap: 100_000_000_000   # 시가총액 하한 (1000억)
+  day_min_trade:  5_000_000_000     # 단기 거래대금 하한 (50억)
+  swing_min_trade: 10_000_000_000   # 스윙 거래대금 하한 (100억)
+
+scanner:
+  pullback_band: 0.03               # MA 기준 눌림 허용 범위 ±3%
+  vol_decay_ratio: 0.70             # 거래량 감소 임계값 (직전 평균 대비)
+
+  day:
+    tp_mult: 2.0                    # 익절 배수 (ATR × n)
+    sl_mult: 1.0                    # 손절 배수 (ATR × n)
+    lookback_days: 150              # OHLCV 조회 기간 (MA60 확보)
+    down_days_min: 2                # 눌림 인정 하락일 수
+    pullback_window: 3              # 눌림 거래량 비교 구간 (일)
+
+  swing:
+    tp_mult: 3.0
+    sl_mult: 1.5
+    lookback_days: 250              # OHLCV 조회 기간 (MA120 확보)
+    down_days_min: 3
+    pullback_window: 5
+
+rsi:
+  period: 14
+  score_high_low: 40               # 고점수 구간 하한 (40~55 → 10점)
+  score_high_high: 55
+  score_mid_low: 30                # 중점수 구간 하한 (30~40 → 5점)
+  score_mid_high: 40
+
+weights:
+  supply: 30        # 수급 (기관+외국인 순매수일)
+  risk_reward: 25   # 손익비
+  pullback: 15      # 눌림률
+  trend_quality: 20 # 추세 품질 (거래량 연속 감소)
+  rsi_score: 10     # RSI 구간 점수
+
+backtest:
+  day_tp_pct: 0.05
+  day_sl_pct: 0.02
+  day_max_hold: 5
+  swing_tp_pct: 0.07
+  swing_sl_pct: 0.03
+  swing_max_hold: 10
+  min_market_cap: 30_000_000_000
+  sample_size: 200
+  slippage: 0.001                  # 매수 슬리피지 0.1%
+  pullback_band: 0.03
+
+fees:
+  commission: 0.00015              # 수수료 0.015%
+  tax: 0.002                       # 증권거래세 0.2%
