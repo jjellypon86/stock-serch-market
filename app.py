@@ -438,9 +438,19 @@ with tab_verify:
             st.subheader("추천 히스토리")
             if "ticker" in df_hist.columns:
                 df_hist = df_hist.copy()
-                df_hist["ticker"] = df_hist["ticker"].apply(
-                    lambda x: str(int(float(x))).zfill(6) if pd.notna(x) and str(x).strip() not in ("", "None") else ""
-                )
+
+                def _fmt_ticker(x: object) -> str:
+                    if not pd.notna(x):
+                        return ""
+                    s = str(x).strip()
+                    if s in ("", "None", "nan"):
+                        return ""
+                    try:
+                        return str(int(float(s))).zfill(6)
+                    except (ValueError, OverflowError):
+                        return s  # 영문자 포함 종목코드 등 그대로 반환
+
+                df_hist["ticker"] = df_hist["ticker"].apply(_fmt_ticker)
             st.dataframe(
                 df_hist.rename(columns={
                     "scan_date": "스캔일", "strategy": "전략", "market": "시장",
