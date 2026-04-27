@@ -439,7 +439,7 @@ with tab_verify:
             if "ticker" in df_hist.columns:
                 df_hist = df_hist.copy()
                 df_hist["ticker"] = df_hist["ticker"].apply(
-                    lambda x: str(int(float(x))).zfill(6) if str(x).strip() not in ("", "None") else ""
+                    lambda x: str(int(float(x))).zfill(6) if pd.notna(x) and str(x).strip() not in ("", "None") else ""
                 )
             st.dataframe(
                 df_hist.rename(columns={
