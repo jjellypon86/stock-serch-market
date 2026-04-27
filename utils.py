@@ -250,8 +250,12 @@ def get_market_direction(date: str) -> dict[str, object]:
     df = get_ohlcv("^KS11", start, date)
     if len(df) < 20:
         return {"trend": "unknown", "kospi": 0, "ma20": 0, "gap_pct": 0.0}
-    kospi = float(df["종가"].iloc[-1])
-    ma20  = float(df["종가"].rolling(20).mean().iloc[-1])
+    kospi_raw = df["종가"].iloc[-1]
+    ma20_raw  = df["종가"].rolling(20).mean().iloc[-1]
+    if pd.isna(kospi_raw) or pd.isna(ma20_raw):
+        return {"trend": "unknown", "kospi": 0, "ma20": 0, "gap_pct": 0.0}
+    kospi = float(kospi_raw)
+    ma20  = float(ma20_raw)
     gap_pct = round((kospi - ma20) / ma20 * 100, 2)
     return {
         "trend": "상승" if kospi >= ma20 else "하락",
