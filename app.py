@@ -151,9 +151,11 @@ with tab_day:
         if st.session_state.df_day.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            saved, err = save_scan_results(st.session_state.df_day, "day", market, date_str)
+            saved, err, n_saved, n_skip = save_scan_results(st.session_state.df_day, "day", market, date_str)
+            parts = ([f"{n_saved}개 저장"] if n_saved else []) + ([f"{n_skip}개 중복 건너뜀"] if n_skip else [])
+            detail = " / ".join(parts) if parts else "변경 없음"
             if saved:
-                st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천 — Google Sheets 저장 완료")
+                st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천 — {detail}")
             else:
                 st.success(f"베스트 {len(st.session_state.df_day)}개 최종 추천")
                 if err:
@@ -232,9 +234,11 @@ with tab_swing:
         if st.session_state.df_swing.empty:
             st.info("조건에 맞는 종목이 없습니다.")
         else:
-            saved, err = save_scan_results(st.session_state.df_swing, "swing", market, date_str)
+            saved, err, n_saved, n_skip = save_scan_results(st.session_state.df_swing, "swing", market, date_str)
+            parts = ([f"{n_saved}개 저장"] if n_saved else []) + ([f"{n_skip}개 중복 건너뜀"] if n_skip else [])
+            detail = " / ".join(parts) if parts else "변경 없음"
             if saved:
-                st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천 — Google Sheets 저장 완료")
+                st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천 — {detail}")
             else:
                 st.success(f"베스트 {len(st.session_state.df_swing)}개 최종 추천")
                 if err:

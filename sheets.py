@@ -49,14 +49,38 @@ def _get_worksheet():
     return ws
 
 
-def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: str) -> tuple[bool, str]:
-    """스캔 완료 즉시 Sheets에 추가. 결과 컬럼은 공란. 반환: (성공여부, 에러메시지)"""
+def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: str) -> tuple[bool, str, int, int]:
+    """스캔 완료 즉시 Sheets에 추가. 결과 컬럼은 공란.
+    반환: (성공여부, 에러메시지, 저장건수, 중복건너뜀건수)"""
     if not _is_configured():
-        return False, "gcp_service_account secrets 미설정"
+        return False, "gcp_service_account secrets 미설정", 0, 0
     try:
         ws = _get_worksheet()
-        rows = [
-            [
+
+        existing_keys: set[tuple[str, str, str]] = set()
+        try:
+            for er in ws.get_all_records():
+                raw = str(er.get("ticker", ""))
+                try:
+                    t = str(int(float(raw))).zfill(6)
+                except (ValueError, TypeError):
+                    t = raw.strip()
+                existing_keys.add((
+                    str(er.get("scan_date", "")),
+                    str(er.get("strategy", "")),
+                    t,
+                ))
+        except Exception:
+            pass  # 기존 키 조회 실패 시 중복 체크 없이 전체 저장
+
+        rows = []
+        skipped = 0
+        for _, r in df.iterrows():
+            key = (scan_date, strategy, str(r["ticker"]).zfill(6))
+            if key in existing_keys:
+                skipped += 1
+                continue
+            rows.append([
                 scan_date, strategy, market,
                 "'" + str(r["ticker"]).zfill(6), r["name"],
                 int(r["buy_price"]), "",
@@ -65,13 +89,13 @@ def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: s
                 int(r.get("inst_days", 0)), int(r.get("foreign_days", 0)),
                 "", "", "",
                 "",
-            ]
-            for _, r in df.iterrows()
-        ]
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
-        return True, ""
+            ])
+
+        if rows:
+            ws.append_rows(rows, value_input_option="USER_ENTERED")
+        return True, "", len(rows), skipped
     except Exception as e:
-        return False, str(e)
+        return False, str(e), 0, 0
 
 
 def _next_trading_day(date_str: str) -> str:
