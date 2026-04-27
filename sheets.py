@@ -58,7 +58,7 @@ def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: s
         rows = [
             [
                 scan_date, strategy, market,
-                str(r["ticker"]).zfill(6), r["name"],
+                "'" + str(r["ticker"]).zfill(6), r["name"],
                 int(r["buy_price"]), "",
                 int(r["take_profit"]), int(r["stop_loss"]),
                 float(r["risk_reward"]), round(float(r["pullback_pct"]), 2),
@@ -130,22 +130,22 @@ def _calc_result(
         return "", "ERROR", 0.0, 0
 
 
-def update_results() -> int:
+def update_results() -> tuple[int, str]:
     """
     result 컬럼이 비어 있는 행을 FDR로 자동 판정해 Sheets 업데이트.
-    반환: 업데이트된 행 수
+    반환: (업데이트된 행 수, 에러 메시지 — 없으면 "")
     """
     if not _is_configured():
-        return 0
+        return 0, ""
     try:
         ws = _get_worksheet()
         all_rows = ws.get_all_records()
         if not all_rows:
-            return 0
+            return 0, ""
 
         updated = 0
         for i, row in enumerate(all_rows):
-            if row.get("result") not in ("", None):
+            if row.get("result") not in ("", None, "ERROR"):
                 continue
 
             scan_date = str(row.get("scan_date", ""))
@@ -189,9 +189,9 @@ def update_results() -> int:
             ws.update_cell(sheet_row, col_hold,    hold_days)
             updated += 1
 
-        return updated
-    except Exception:
-        return 0
+        return updated, ""
+    except Exception as e:
+        return 0, str(e)
 
 
 def load_history() -> pd.DataFrame:

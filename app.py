@@ -356,8 +356,10 @@ with tab_verify:
     else:
         if st.button("🔄 결과 업데이트", key="btn_update"):
             with st.spinner("미완료 종목 결과 자동 판정 중..."):
-                n = update_results()
-            if n > 0:
+                n, err = update_results()
+            if err:
+                st.error(f"업데이트 오류: {err}")
+            elif n > 0:
                 st.success(f"{n}개 종목 결과 업데이트 완료")
             else:
                 st.info("업데이트할 항목이 없습니다.")
@@ -434,6 +436,11 @@ with tab_verify:
 
             st.divider()
             st.subheader("추천 히스토리")
+            if "ticker" in df_hist.columns:
+                df_hist = df_hist.copy()
+                df_hist["ticker"] = df_hist["ticker"].apply(
+                    lambda x: str(int(float(x))).zfill(6) if str(x).strip() not in ("", "None") else ""
+                )
             st.dataframe(
                 df_hist.rename(columns={
                     "scan_date": "스캔일", "strategy": "전략", "market": "시장",
