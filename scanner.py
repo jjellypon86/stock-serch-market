@@ -6,6 +6,7 @@ import streamlit as st
 from utils import (
     add_atr,
     add_moving_averages,
+    add_rsi,
     get_investor_flow,
     get_ohlcv,
     get_stock_listing,
@@ -25,14 +26,17 @@ PULLBACK_BAND = 0.03
 
 
 def _select_best3(df: pd.DataFrame) -> pd.DataFrame:
-    """수급(40%)·손익비(35%)·눌림률(25%) 가중 점수로 상위 3개 반환"""
+    """수급(30%)·손익비(25%)·눌림률(15%)·추세품질(20%)·RSI구간(10%) 가중 점수로 상위 3개 반환"""
     if df.empty:
         return df
     df = df.copy()
+    trend_score = df["vol_consec_drop"].astype(int) * 20
     df["_score"] = (
-        (df["inst_days"] + df["foreign_days"]) / 6 * 40
-        + df["risk_reward"].clip(upper=3.0) / 3.0 * 35
-        + (1 - df["pullback_pct"].abs() / 5.0).clip(lower=0) * 25
+        (df["inst_days"] + df["foreign_days"]) / 6 * 30
+        + df["risk_reward"].clip(upper=3.0) / 3.0 * 25
+        + (1 - df["pullback_pct"].abs() / 5.0).clip(lower=0) * 15
+        + trend_score
+        + df["rsi_score"] / 10.0 * 10
     )
     return df.nlargest(3, "_score").drop(columns="_score").reset_index(drop=True)
 
@@ -97,7 +101,8 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
 
         df = add_moving_averages(df)
         df = add_atr(df)
-        df = df.dropna(subset=["MA20", "MA60", "ATR"])
+        df = add_rsi(df)
+        df = df.dropna(subset=["MA20", "MA60", "ATR", "RSI"])
 
         if len(df) < 5:
             continue
@@ -121,6 +126,10 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         if not (-3.0 <= pullback_pct <= 1.0):
             continue
 
+        # MA20 우상향 필터 (지지선 역할 확인)
+        if df["MA20"].iloc[-1] <= df["MA20"].iloc[-2]:
+            continue
+
         # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
         if len(df) < 26:
             continue
@@ -128,6 +137,9 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         vol_prev = df["거래량"].iloc[-23:-3].mean()
         if vol_prev == 0 or vol_3d >= vol_prev * 0.7:
             continue
+        vol_consec_drop = bool(
+            df["거래량"].iloc[-3] > df["거래량"].iloc[-2] > df["거래량"].iloc[-1]
+        )
 
         # ⑤ 수급 필터
         flow = get_investor_flow(ticker)
@@ -138,6 +150,15 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             foreign_days = flow["외국인_순매수일"]
             if inst_days < 2 and foreign_days < 2:
                 continue
+
+        # RSI 구간 점수
+        rsi_val = df["RSI"].iloc[-1]
+        if 40 <= rsi_val <= 55:
+            rsi_score = 10
+        elif 30 <= rsi_val < 40:
+            rsi_score = 5
+        else:
+            rsi_score = 0
 
         atr = df["ATR"].iloc[-1]
         tp, sl, rr = _calc_exit_prices(close, atr, DAY_TP_MULT, DAY_SL_MULT)
@@ -156,6 +177,8 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             "stop_loss": sl,
             "risk_reward": rr,
             "net_profit_pct": net_profit_pct,
+            "rsi_score": rsi_score,
+            "vol_consec_drop": vol_consec_drop,
         })
 
     progress.empty()
@@ -201,7 +224,8 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
 
         df = add_moving_averages(df)
         df = add_atr(df)
-        df = df.dropna(subset=["MA60", "MA120", "ATR"])
+        df = add_rsi(df)
+        df = df.dropna(subset=["MA20", "MA60", "MA120", "ATR", "RSI"])
 
         if len(df) < 7:
             continue
@@ -223,6 +247,10 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
         if not (-3.0 <= pullback_pct <= 1.0):
             continue
 
+        # MA20 우상향 필터 (단기 지지선 역할 확인)
+        if df["MA20"].iloc[-1] <= df["MA20"].iloc[-2]:
+            continue
+
         # ④ 거래량 감소 (눌림 5일 vs 직전 20일 비교 — 구간 분리)
         if len(df) < 28:
             continue
@@ -230,6 +258,9 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
         vol_prev = df["거래량"].iloc[-25:-5].mean()
         if vol_prev == 0 or vol_5d >= vol_prev * 0.7:
             continue
+        vol_consec_drop = bool(
+            df["거래량"].iloc[-3] > df["거래량"].iloc[-2] > df["거래량"].iloc[-1]
+        )
 
         # ⑤ 수급 필터
         flow = get_investor_flow(ticker)
@@ -240,6 +271,15 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
             foreign_days = flow["외국인_순매수일"]
             if inst_days < 2 and foreign_days < 2:
                 continue
+
+        # RSI 구간 점수
+        rsi_val = df["RSI"].iloc[-1]
+        if 40 <= rsi_val <= 55:
+            rsi_score = 10
+        elif 30 <= rsi_val < 40:
+            rsi_score = 5
+        else:
+            rsi_score = 0
 
         atr = df["ATR"].iloc[-1]
         tp, sl, rr = _calc_exit_prices(close, atr, SWING_TP_MULT, SWING_SL_MULT)
@@ -258,6 +298,8 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
             "take_profit": tp,
             "stop_loss": sl,
             "risk_reward": rr,
+            "rsi_score": rsi_score,
+            "vol_consec_drop": vol_consec_drop,
         })
 
     progress.empty()
