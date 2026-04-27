@@ -371,6 +371,22 @@ with tab_verify:
         else:
             df_done = df_hist[df_hist["result"].isin(["WIN", "LOSS", "EXPIRED"])].copy()
 
+            n_total   = len(df_hist)
+            n_done    = len(df_done)
+            n_pending = df_hist["result"].apply(lambda x: str(x).strip() in ("", "PENDING", "None")).sum()
+            n_error   = (df_hist["result"] == "ERROR").sum()
+
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            sc1.metric("전체 기록", n_total)
+            sc2.metric("완료 (WIN/LOSS/EXPIRED)", n_done)
+            sc3.metric("대기 중 (PENDING)", n_pending)
+            sc4.metric("오류 (ERROR)", n_error)
+
+            if n_done == 0:
+                st.info("아직 완료된 거래가 없습니다. 단기 전략은 스캔일 기준 5거래일, 스윙은 10거래일 이후 결과 업데이트를 실행해 주세요.")
+            else:
+                st.divider()
+
             if not df_done.empty:
                 df_done["profit_pct"] = pd.to_numeric(df_done["profit_pct"], errors="coerce")
 
