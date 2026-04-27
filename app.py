@@ -364,6 +364,7 @@ with tab_verify:
             if err:
                 st.error(f"업데이트 오류: {err}")
             elif n > 0:
+                load_history.clear()
                 st.success(f"{n}개 종목 결과 업데이트 완료")
             else:
                 st.info("업데이트할 항목이 없습니다.")

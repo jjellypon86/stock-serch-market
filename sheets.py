@@ -218,8 +218,9 @@ def update_results() -> tuple[int, str]:
         return 0, str(e)
 
 
+@st.cache_data(ttl=300)
 def load_history() -> pd.DataFrame:
-    """Sheets 전체 히스토리 로드."""
+    """Sheets 전체 히스토리 로드 (5분 캐시)."""
     if not _is_configured():
         return pd.DataFrame()
     try:
