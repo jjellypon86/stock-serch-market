@@ -130,6 +130,12 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         if df["MA20"].iloc[-1] <= df["MA20"].iloc[-2]:
             continue
 
+        # 최근 20일 고점 대비 -5% 이상 눌린 경우만 허용 (고점 붙어있는 가짜 눌림목 제외)
+        recent_high = df["고가"].iloc[-20:].max()
+        drawdown_from_high = (close - recent_high) / recent_high * 100
+        if drawdown_from_high > -5.0:
+            continue
+
         # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
         if len(df) < 26:
             continue
@@ -151,8 +157,12 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             if inst_days < 2 and foreign_days < 2:
                 continue
 
-        # RSI 구간 점수
+        # RSI 하드 필터: 과매수 구간 제외
         rsi_val = df["RSI"].iloc[-1]
+        if rsi_val > 70:
+            continue
+
+        # RSI 구간 점수
         if 40 <= rsi_val <= 55:
             rsi_score = 10
         elif 30 <= rsi_val < 40:
