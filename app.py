@@ -8,6 +8,21 @@ from scanner import scan_day_trading, scan_swing
 from sheets import evaluate_strategy, is_configured, load_history, save_scan_results, update_results
 from utils import get_last_trading_date, get_market_direction, get_stock_news
 
+try:
+    from coin_scanner import scan_coin_day, scan_coin_swing
+    _COIN_SCANNER_OK = True
+except ImportError:
+    _COIN_SCANNER_OK = False
+
+from coin_sheets import (
+    evaluate_coin_strategy,
+    is_coin_configured,
+    load_coin_history,
+    save_coin_scan_results,
+    update_coin_results,
+)
+from coin_utils import get_btc_direction
+
 st.set_page_config(
     page_title="K-Quant Tracker",
     page_icon="📈",
@@ -29,9 +44,14 @@ if "df_day" not in st.session_state:
     st.session_state.df_day = pd.DataFrame()
 if "df_swing" not in st.session_state:
     st.session_state.df_swing = pd.DataFrame()
+if "df_coin_day" not in st.session_state:
+    st.session_state.df_coin_day = pd.DataFrame()
+if "df_coin_swing" not in st.session_state:
+    st.session_state.df_coin_swing = pd.DataFrame()
 
-tab_day, tab_swing, tab_backtest, tab_verify = st.tabs([
-    "📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트", "📈 검증"
+tab_day, tab_swing, tab_backtest, tab_verify, tab_coin_day, tab_coin_swing, tab_coin_verify = st.tabs([
+    "📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트", "📈 검증",
+    "🪙 코인 단기", "🪙 코인 스윙", "🪙 코인 검증",
 ])
 
 
@@ -93,6 +113,59 @@ def render_stock_card(row: pd.Series) -> None:
                 st.markdown(f"- [{news['title']}]({news['url']}) `{news['date']}`")
         else:
             st.caption("뉴스 데이터 없음")
+
+
+def render_btc_banner() -> None:
+    """BTC 시장 방향 배너"""
+    direction = get_btc_direction()
+    if direction == "상승":
+        st.success("🟢 BTC 상승 추세 — 스캔 정상 실행")
+    elif direction == "하락":
+        st.error("🔴 BTC 하락 추세 — 스캔 중단 (BTC MA60 이하), 신호 신뢰도 낮음")
+    else:
+        st.warning("🟡 BTC 중립 — BTC MA20~MA60 사이, 선택적 진입")
+
+
+def render_coin_card(row: pd.Series) -> None:
+    """코인 단건 상세 카드"""
+    ticker = str(row["ticker"])
+    close = float(row["close"])
+    tp = float(row["take_profit"])
+    sl = float(row["stop_loss"])
+    rr = float(row["risk_reward"])
+    pullback_pct = float(row["pullback_pct"])
+    rsi = float(row.get("rsi", 0) or 0)
+
+    label = (
+        f"**{ticker}**"
+        f"  —  눌림 {pullback_pct:+.1f}%"
+        f"  /  손익비 {rr}:1"
+        f"  /  RSI {rsi:.0f}"
+    )
+    with st.expander(label, expanded=True):
+        r1c1, r1c2 = st.columns(2)
+        r1c1.metric("매수 참고가 💰", f"{close:,.0f}원", delta="현재 종가 기준", delta_color="off")
+        r1c2.metric("RSI", f"{rsi:.1f}", delta="75 이하 통과", delta_color="off")
+
+        r2c1, r2c2 = st.columns(2)
+        tp_pct = round((tp / close - 1) * 100, 1)
+        sl_pct = round((sl / close - 1) * 100, 1)
+        r2c1.metric("익절가 🎯", f"{tp:,.0f}원", delta=f"+{tp_pct}%")
+        r2c2.metric("손절가 🛑", f"{sl:,.0f}원", delta=f"{sl_pct}%", delta_color="inverse")
+
+        st.divider()
+        col_a, col_b = st.columns(2)
+        col_a.info(f"📊 눌림폭: **{pullback_pct:+.2f}%**")
+        col_b.info(f"⚡ ATR: **{float(row.get('atr', 0) or 0):,.4f}**")
+
+        with st.expander("📋 매매 가이드"):
+            st.markdown(f"""
+- **진입 참고가**: {close:,.0f}원 (현재 종가 기준, 직접 시장가 주문)
+- **익절 목표**: {tp:,.0f}원 (현재가 대비 **+{tp_pct}%**)
+- **손절 기준**: {sl:,.0f}원 (현재가 대비 **{sl_pct}%**)
+- **손익비**: {rr}:1
+- ⚠️ 빗썸 앱에서 수동으로 주문 — 이 신호는 참고용입니다
+""")
 
 
 def render_metric_cards(df: pd.DataFrame) -> None:
@@ -569,6 +642,190 @@ with tab_verify:
                 st.dataframe(styled, use_container_width=True, hide_index=True)
             else:
                 st.dataframe(df_renamed.style.format(fmt), use_container_width=True, hide_index=True)
+
+# ── 코인 단기 탭 ─────────────────────────────────────────────────────────────
+with tab_coin_day:
+    render_btc_banner()
+    st.subheader("코인 단기 — MA20 눌림목 스캔")
+
+    if not _COIN_SCANNER_OK:
+        st.error("coin_scanner.py를 찾을 수 없습니다.")
+    else:
+        if st.button("🔍 코인 단기 스캔", key="btn_coin_day"):
+            with st.spinner("코인 스캔 중..."):
+                st.session_state.df_coin_day = scan_coin_day()
+
+    df_coin_day = st.session_state.df_coin_day
+
+    if df_coin_day.empty:
+        st.info("스캔을 실행하거나, BTC 방향 조건 미충족으로 신호 없음")
+    else:
+        st.success(f"✅ 상위 {len(df_coin_day)}개 코인 발견")
+        for _, row in df_coin_day.iterrows():
+            render_coin_card(row)
+
+        st.divider()
+        if is_coin_configured():
+            scan_date_str = datetime.now().strftime("%Y-%m-%d")
+            if st.button("💾 Sheets에 저장", key="save_coin_day"):
+                ok, err, saved, skipped = save_coin_scan_results(df_coin_day, "day", scan_date_str)
+                if ok:
+                    st.success(f"저장 완료 — {saved}건 저장, {skipped}건 중복 스킵")
+                else:
+                    st.error(f"저장 실패: {err}")
+        else:
+            st.caption("⚙️ gcp_service_account secrets 미설정 — Sheets 저장 불가")
+
+        with st.expander("📋 전체 스캔 결과"):
+            display_cols = ["ticker", "close", "take_profit", "stop_loss", "risk_reward", "pullback_pct", "rsi", "volume_24h"]
+            available = [c for c in display_cols if c in df_coin_day.columns]
+            st.dataframe(df_coin_day[available], use_container_width=True)
+
+
+# ── 코인 스윙 탭 ─────────────────────────────────────────────────────────────
+with tab_coin_swing:
+    render_btc_banner()
+    st.subheader("코인 스윙 — MA60 눌림목 스캔")
+
+    if not _COIN_SCANNER_OK:
+        st.error("coin_scanner.py를 찾을 수 없습니다.")
+    else:
+        if st.button("🔍 코인 스윙 스캔", key="btn_coin_swing"):
+            with st.spinner("코인 스캔 중..."):
+                st.session_state.df_coin_swing = scan_coin_swing()
+
+    df_coin_swing = st.session_state.df_coin_swing
+
+    if df_coin_swing.empty:
+        st.info("스캔을 실행하거나, BTC 방향 조건 미충족으로 신호 없음")
+    else:
+        st.success(f"✅ 상위 {len(df_coin_swing)}개 코인 발견")
+        for _, row in df_coin_swing.iterrows():
+            render_coin_card(row)
+
+        st.divider()
+        if is_coin_configured():
+            scan_date_str = datetime.now().strftime("%Y-%m-%d")
+            if st.button("💾 Sheets에 저장", key="save_coin_swing"):
+                ok, err, saved, skipped = save_coin_scan_results(df_coin_swing, "swing", scan_date_str)
+                if ok:
+                    st.success(f"저장 완료 — {saved}건 저장, {skipped}건 중복 스킵")
+                else:
+                    st.error(f"저장 실패: {err}")
+        else:
+            st.caption("⚙️ gcp_service_account secrets 미설정 — Sheets 저장 불가")
+
+        with st.expander("📋 전체 스캔 결과"):
+            display_cols = ["ticker", "close", "take_profit", "stop_loss", "risk_reward", "pullback_pct", "rsi", "volume_24h"]
+            available = [c for c in display_cols if c in df_coin_swing.columns]
+            st.dataframe(df_coin_swing[available], use_container_width=True)
+
+
+# ── 코인 검증 탭 ─────────────────────────────────────────────────────────────
+with tab_coin_verify:
+    st.subheader("코인 매매 검증")
+
+    if not is_coin_configured():
+        st.warning("gcp_service_account secrets 미설정 — Sheets 연동 불가")
+    else:
+        if st.button("🔄 결과 자동 판정 (PENDING → WIN/LOSS/EXPIRED)", key="btn_coin_update"):
+            with st.spinner("판정 중..."):
+                updated, err = update_coin_results()
+            if err:
+                st.error(f"오류: {err}")
+            else:
+                st.success(f"{updated}건 업데이트 완료")
+                st.cache_data.clear()
+
+        df_coin_hist = load_coin_history()
+
+        if df_coin_hist.empty:
+            st.info("저장된 코인 매매 데이터 없음")
+        else:
+            df_coin_done = df_coin_hist[df_coin_hist["result"].isin(["WIN", "LOSS", "EXPIRED"])].copy()
+            df_coin_pending = df_coin_hist[df_coin_hist["result"].apply(
+                lambda x: str(x).strip() in ("", "PENDING", "None")
+            )]
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("총 신호", len(df_coin_hist))
+            col2.metric("완료", len(df_coin_done))
+            col3.metric("대기중", len(df_coin_pending))
+
+            if len(df_coin_done) > 0:
+                df_coin_done["profit_pct"] = pd.to_numeric(
+                    df_coin_done["profit_pct"], errors="coerce"
+                ).fillna(0)
+                wins = (df_coin_done["result"] == "WIN").sum()
+                win_rate = wins / len(df_coin_done) * 100
+                ev = df_coin_done["profit_pct"].mean()
+                col4.metric("승률", f"{win_rate:.1f}%")
+
+                c1, c2 = st.columns(2)
+                c1.metric("기대값 (per trade)", f"{ev:+.2f}%")
+
+                if len(df_coin_done) >= 30:
+                    st.divider()
+                    st.subheader("📊 전략 자가 진단")
+                    result = evaluate_coin_strategy(df_coin_done)
+                    score = int(result["score"])
+                    verdict = str(result["verdict"])
+                    verdict_color = "🟢" if verdict == "합격" else "🟡" if verdict == "경고" else "🔴"
+                    st.metric("전략 점수", f"{score}/100", delta=f"{verdict_color} {verdict}")
+
+                    bd = result["breakdown"]
+                    b1, b2, b3, b4 = st.columns(4)
+                    b1.metric("승률 점수", f"{bd['win_rate']['score']}/{bd['win_rate']['max']}", delta=f"{bd['win_rate']['value']}%")
+                    b2.metric("기대값 점수", f"{bd['expected_value']['score']}/{bd['expected_value']['max']}", delta=f"{bd['expected_value']['value']}%")
+                    b3.metric("MDD 점수", f"{bd['mdd']['score']}/{bd['mdd']['max']}", delta=f"{bd['mdd']['value']}%")
+                    b4.metric("손익비 점수", f"{bd['pl_ratio']['score']}/{bd['pl_ratio']['max']}", delta=str(bd['pl_ratio']['value']))
+
+                    weak_points = result.get("weak_points", [])
+                    if isinstance(weak_points, list) and weak_points:
+                        st.warning("개선 필요: " + " / ".join(weak_points))
+                else:
+                    st.info(f"전략 점수는 완료 30건 이상 필요 (현재 {len(df_coin_done)}건)")
+
+            st.divider()
+            st.subheader("📋 히스토리")
+
+            fc1, fc2, fc3 = st.columns(3)
+            strategy_filter = fc1.selectbox("전략", ["전체", "day", "swing"], key="coin_hist_strategy")
+            result_filter = fc2.selectbox("결과", ["전체", "PENDING", "WIN", "LOSS", "EXPIRED"], key="coin_hist_result")
+            actual_buy_filter = fc3.selectbox("실매매", ["전체", "Y", "N"], key="coin_hist_actual")
+
+            df_coin_disp = df_coin_hist.copy()
+
+            if strategy_filter != "전체":
+                df_coin_disp = df_coin_disp[df_coin_disp["strategy"] == strategy_filter]
+            if result_filter != "전체":
+                if result_filter == "PENDING":
+                    df_coin_disp = df_coin_disp[df_coin_disp["result"].apply(
+                        lambda x: str(x).strip() in ("", "PENDING", "None")
+                    )]
+                else:
+                    df_coin_disp = df_coin_disp[df_coin_disp["result"] == result_filter]
+            if actual_buy_filter != "전체" and "actual_buy" in df_coin_disp.columns:
+                df_coin_disp = df_coin_disp[
+                    df_coin_disp["actual_buy"].astype(str).str.upper() == actual_buy_filter
+                ]
+
+            _coin_result_colors: dict[str, str] = {
+                "WIN":     "background-color: #155724; color: #d4edda; font-weight: bold",
+                "LOSS":    "background-color: #721c24; color: #f8d7da; font-weight: bold",
+                "EXPIRED": "background-color: #383d41; color: #e2e3e5; font-weight: bold",
+                "PENDING": "background-color: #856404; color: #fff3cd; font-weight: bold",
+            }
+
+            def _color_coin_result(val: object) -> str:
+                return _coin_result_colors.get(str(val), "")
+
+            if "result" in df_coin_disp.columns:
+                styled = df_coin_disp.style.map(_color_coin_result, subset=["result"])
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(df_coin_disp, use_container_width=True, hide_index=True)
+
 
 st.divider()
 st.markdown("""
