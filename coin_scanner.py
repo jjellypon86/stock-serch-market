@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import os
-import yaml
 import pandas as pd
 import streamlit as st
 
@@ -14,10 +12,43 @@ from coin_utils import (
   get_ohlcv_coin,
 )
 
-# coin_config.yaml — __file__ 기준 절대경로로 로드 (CWD 무관)
-_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coin_config.yaml")
-with open(_CONFIG_PATH, "r") as f:
-  _CFG = yaml.safe_load(f)
+# 전략 파라미터 (yaml 의존성 제거 — 외부 패키지 없이 동작)
+_CFG: dict[str, object] = {
+  "strategy": {
+    "day": {
+      "ma_short": 20,
+      "ma_long": 60,
+      "pullback_window": 3,
+      "pullback_band": 6.0,
+      "vol_decay_ratio": 0.70,
+      "rsi_overbought": 75,
+      "drawdown_from_high": -10.0,
+      "tp_mult": 4.0,
+      "sl_mult": 2.0,
+      "max_hold_days": 5,
+    },
+    "swing": {
+      "ma_short": 60,
+      "ma_long": 120,
+      "pullback_window": 5,
+      "pullback_band": 10.0,
+      "vol_decay_ratio": 0.70,
+      "rsi_overbought": 75,
+      "drawdown_from_high": -15.0,
+      "tp_mult": 6.0,
+      "sl_mult": 3.0,
+      "max_hold_days": 10,
+    },
+  },
+  "market": {
+    "min_24h_volume_krw": 10_000_000_000,
+    "exclude_tickers": ["BTC"],
+  },
+  "fee": {
+    "bithumb_taker": 0.0025,
+    "slippage": 0.001,
+  },
+}
 
 
 def _count_down_days(df: pd.DataFrame, window: int) -> int:
