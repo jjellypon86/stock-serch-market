@@ -469,23 +469,77 @@ with tab_verify:
                     try:
                         return str(int(float(s))).zfill(6)
                     except (ValueError, OverflowError):
-                        return s  # 영문자 포함 종목코드 등 그대로 반환
+                        return s
 
                 df_hist["ticker"] = df_hist["ticker"].apply(_fmt_ticker)
-            st.dataframe(
-                df_hist.rename(columns={
-                    "scan_date": "스캔일", "strategy": "전략", "market": "시장",
-                    "ticker": "종목코드", "name": "종목명",
-                    "buy_price": "매수참고가", "entry_price": "진입가",
-                    "take_profit": "익절가", "stop_loss": "손절가",
-                    "risk_reward": "손익비", "pullback_pct": "눌림(%)",
-                    "inst_days": "기관", "foreign_days": "외국인",
-                    "result": "결과", "profit_pct": "수익률(%)", "hold_days": "보유일",
-                    "actual_buy": "실거래",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
+
+            # 필터 컨트롤
+            f1, f2, f3, f4 = st.columns(4)
+            sel_strategy = f1.selectbox("전략", ["전체", "단기", "스윙"], key="hist_strategy")
+            sel_market   = f2.selectbox("시장", ["전체", "KOSPI", "KOSDAQ"], key="hist_market")
+            sel_result   = f3.selectbox("결과", ["전체", "WIN", "LOSS", "EXPIRED", "PENDING"], key="hist_result")
+            sel_period   = f4.selectbox("기간", ["전체", "최근 30일", "최근 60일", "최근 90일"], key="hist_period")
+
+            # 필터 적용
+            df_disp = df_hist.copy()
+            strategy_map = {"단기": "day", "스윙": "swing"}
+            if sel_strategy != "전체":
+                df_disp = df_disp[df_disp["strategy"] == strategy_map[sel_strategy]]
+            if sel_market != "전체":
+                df_disp = df_disp[df_disp["market"] == sel_market]
+            if sel_result != "전체":
+                if sel_result == "PENDING":
+                    df_disp = df_disp[df_disp["result"].apply(
+                        lambda x: str(x).strip() in ("", "PENDING", "None")
+                    )]
+                else:
+                    df_disp = df_disp[df_disp["result"] == sel_result]
+            if sel_period != "전체":
+                days_map = {"최근 30일": 30, "최근 60일": 60, "최근 90일": 90}
+                cutoff = (pd.Timestamp.today() - pd.Timedelta(days=days_map[sel_period])).strftime("%Y%m%d")
+                df_disp = df_disp[df_disp["scan_date"].astype(str) >= cutoff]
+
+            # 최신순 정렬
+            df_disp = df_disp.sort_values("scan_date", ascending=False)
+
+            # 핵심 컬럼 / 상세 컬럼 분리
+            show_detail = st.checkbox("상세 컬럼 보기", key="hist_detail")
+            base_cols  = ["scan_date", "strategy", "market", "ticker", "name",
+                          "entry_price", "take_profit", "stop_loss", "result", "profit_pct", "actual_buy"]
+            extra_cols = ["buy_price", "risk_reward", "pullback_pct", "inst_days", "foreign_days", "hold_days"]
+            display_cols = base_cols + (extra_cols if show_detail else [])
+            df_disp = df_disp[[c for c in display_cols if c in df_disp.columns]]
+
+            st.caption(f"총 {len(df_hist)}건 중 {len(df_disp)}건 표시")
+
+            col_rename = {
+                "scan_date": "스캔일", "strategy": "전략", "market": "시장",
+                "ticker": "종목코드", "name": "종목명",
+                "buy_price": "매수참고가", "entry_price": "진입가",
+                "take_profit": "익절가", "stop_loss": "손절가",
+                "risk_reward": "손익비", "pullback_pct": "눌림(%)",
+                "inst_days": "기관", "foreign_days": "외국인",
+                "result": "결과", "profit_pct": "수익률(%)", "hold_days": "보유일",
+                "actual_buy": "실거래",
+            }
+            df_renamed = df_disp.rename(columns=col_rename)
+
+            _result_colors: dict[str, str] = {
+                "WIN": "background-color: #d4edda",
+                "LOSS": "background-color: #f8d7da",
+                "EXPIRED": "background-color: #e2e3e5",
+                "PENDING": "background-color: #fff3cd",
+            }
+
+            def _color_result(val: object) -> str:
+                return _result_colors.get(str(val), "")
+
+            result_col = "결과"
+            if result_col in df_renamed.columns:
+                styled = df_renamed.style.map(_color_result, subset=[result_col])
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+            else:
+                st.dataframe(df_renamed, use_container_width=True, hide_index=True)
 
 st.divider()
 st.markdown("""
