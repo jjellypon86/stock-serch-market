@@ -535,19 +535,40 @@ with tab_verify:
                 return _result_colors.get(str(val), "")
 
             price_cols = [c for c in ["매수참고가", "진입가", "익절가", "손절가"] if c in df_renamed.columns]
-            fmt: dict[str, str] = {c: "{:,.0f}" for c in price_cols}
-            for c in ["수익률(%)", "눌림(%)"]:
-                if c in df_renamed.columns:
-                    fmt[c] = "{:.2f}"
+            pct_cols   = [c for c in ["수익률(%)", "눌림(%)"] if c in df_renamed.columns]
+            num_cols   = price_cols + pct_cols + (["손익비"] if "손익비" in df_renamed.columns else [])
+            for c in num_cols:
+                df_renamed[c] = pd.to_numeric(df_renamed[c], errors="coerce")
+
+            def _price_fmt(x: object) -> str:
+                try:
+                    return f"{float(x):,.0f}"  # type: ignore[arg-type]
+                except (ValueError, TypeError):
+                    return "-"
+
+            def _pct_fmt(x: object) -> str:
+                try:
+                    return f"{float(x):.2f}"  # type: ignore[arg-type]
+                except (ValueError, TypeError):
+                    return "-"
+
+            def _rr_fmt(x: object) -> str:
+                try:
+                    return f"{float(x):.1f}"  # type: ignore[arg-type]
+                except (ValueError, TypeError):
+                    return "-"
+
+            fmt: dict[str, object] = {c: _price_fmt for c in price_cols}
+            fmt.update({c: _pct_fmt for c in pct_cols})
             if "손익비" in df_renamed.columns:
-                fmt["손익비"] = "{:.1f}"
+                fmt["손익비"] = _rr_fmt
 
             result_col = "결과"
             if result_col in df_renamed.columns:
-                styled = df_renamed.style.map(_color_result, subset=[result_col]).format(fmt, na_rep="-")
+                styled = df_renamed.style.map(_color_result, subset=[result_col]).format(fmt)
                 st.dataframe(styled, use_container_width=True, hide_index=True)
             else:
-                st.dataframe(df_renamed.style.format(fmt, na_rep="-"), use_container_width=True, hide_index=True)
+                st.dataframe(df_renamed.style.format(fmt), use_container_width=True, hide_index=True)
 
 st.divider()
 st.markdown("""
