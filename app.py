@@ -505,8 +505,8 @@ with tab_verify:
             # 핵심 컬럼 / 상세 컬럼 분리
             show_detail = st.checkbox("상세 컬럼 보기", key="hist_detail")
             base_cols  = ["scan_date", "strategy", "market", "ticker", "name",
-                          "entry_price", "take_profit", "stop_loss", "result", "profit_pct", "actual_buy"]
-            extra_cols = ["buy_price", "risk_reward", "pullback_pct", "inst_days", "foreign_days", "hold_days"]
+                          "buy_price", "take_profit", "stop_loss", "result", "profit_pct", "actual_buy"]
+            extra_cols = ["entry_price", "risk_reward", "pullback_pct", "inst_days", "foreign_days", "hold_days"]
             display_cols = base_cols + (extra_cols if show_detail else [])
             df_disp = df_disp[[c for c in display_cols if c in df_disp.columns]]
 
