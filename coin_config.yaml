@@ -1,0 +1,33 @@
+strategy:
+  day:
+    ma_short: 20
+    ma_long: 60
+    pullback_window: 3
+    pullback_band: 6.0
+    vol_decay_ratio: 0.70
+    rsi_overbought: 75
+    drawdown_from_high: -10.0
+    tp_mult: 4.0
+    sl_mult: 2.0
+    max_hold_days: 5
+
+  swing:
+    ma_short: 60
+    ma_long: 120
+    pullback_window: 5
+    pullback_band: 10.0
+    vol_decay_ratio: 0.70
+    rsi_overbought: 75
+    drawdown_from_high: -15.0
+    tp_mult: 6.0
+    sl_mult: 3.0
+    max_hold_days: 10
+
+market:
+  min_24h_volume_krw: 10000000000
+  exclude_tickers:
+    - BTC
+
+fee:
+  bithumb_taker: 0.0025
+  slippage: 0.001
