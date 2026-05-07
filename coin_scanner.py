@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import yaml
 import pandas as pd
 import streamlit as st
@@ -13,8 +14,9 @@ from coin_utils import (
   get_ohlcv_coin,
 )
 
-# coin_config.yaml 로드
-with open("coin_config.yaml", "r") as f:
+# coin_config.yaml — __file__ 기준 절대경로로 로드 (CWD 무관)
+_CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "coin_config.yaml")
+with open(_CONFIG_PATH, "r") as f:
   _CFG = yaml.safe_load(f)
 
 

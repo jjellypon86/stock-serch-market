@@ -8,11 +8,13 @@ from scanner import scan_day_trading, scan_swing
 from sheets import evaluate_strategy, is_configured, load_history, save_scan_results, update_results
 from utils import get_last_trading_date, get_market_direction, get_stock_news
 
+_COIN_SCANNER_ERR: str = ""
 try:
     from coin_scanner import scan_coin_day, scan_coin_swing
     _COIN_SCANNER_OK = True
-except ImportError:
+except Exception as _e:
     _COIN_SCANNER_OK = False
+    _COIN_SCANNER_ERR = str(_e)
 
 from coin_sheets import (
     evaluate_coin_strategy,
@@ -649,7 +651,7 @@ with tab_coin_day:
     st.subheader("코인 단기 — MA20 눌림목 스캔")
 
     if not _COIN_SCANNER_OK:
-        st.error("coin_scanner.py를 찾을 수 없습니다.")
+        st.error(f"coin_scanner 로드 실패: {_COIN_SCANNER_ERR}")
     else:
         if st.button("🔍 코인 단기 스캔", key="btn_coin_day"):
             with st.spinner("코인 스캔 중..."):
@@ -688,7 +690,7 @@ with tab_coin_swing:
     st.subheader("코인 스윙 — MA60 눌림목 스캔")
 
     if not _COIN_SCANNER_OK:
-        st.error("coin_scanner.py를 찾을 수 없습니다.")
+        st.error(f"coin_scanner 로드 실패: {_COIN_SCANNER_ERR}")
     else:
         if st.button("🔍 코인 스윙 스캔", key="btn_coin_swing"):
             with st.spinner("코인 스캔 중..."):
