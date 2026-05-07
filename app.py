@@ -525,10 +525,10 @@ with tab_verify:
             df_renamed = df_disp.rename(columns=col_rename)
 
             _result_colors: dict[str, str] = {
-                "WIN": "background-color: #d4edda",
-                "LOSS": "background-color: #f8d7da",
-                "EXPIRED": "background-color: #e2e3e5",
-                "PENDING": "background-color: #fff3cd",
+                "WIN":     "background-color: #155724; color: #d4edda; font-weight: bold",
+                "LOSS":    "background-color: #721c24; color: #f8d7da; font-weight: bold",
+                "EXPIRED": "background-color: #383d41; color: #e2e3e5; font-weight: bold",
+                "PENDING": "background-color: #856404; color: #fff3cd; font-weight: bold",
             }
 
             def _color_result(val: object) -> str:
