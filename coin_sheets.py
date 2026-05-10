@@ -82,8 +82,8 @@ def _calc_coin_result(
   """
   pybithumb으로 OHLCV 조회 후 거래 결과 자동 판정.
 
-  판정 로직:
-  - 첫째 날(i==0): entry_price = open * (1 + SLIPPAGE)
+  코인은 24/7 거래이므로 스캔 당일 즉시 진입 가정:
+  - 첫째 날(i==0, scan_date): entry_price = close * (1 + SLIPPAGE)
   - 이후 날:
       high >= take_profit → WIN
       low  <= stop_loss   → LOSS
@@ -99,7 +99,7 @@ def _calc_coin_result(
     if df is None or df.empty:
       return 0.0, "ERROR", 0.0, 0
 
-    # entry_date_str 이후 데이터만 추출
+    # scan_date 이후 데이터만 추출
     entry_dt = datetime.strptime(entry_date_str, "%Y-%m-%d")
     df = df[df.index >= entry_dt].copy()
     if df.empty:
@@ -112,11 +112,10 @@ def _calc_coin_result(
       high  = float(row["high"])
       low   = float(row["low"])
       close = float(row["close"])
-      open_ = float(row["open"])
 
       if i == 0:
-        # 첫째 날: 슬리피지 반영 진입가 계산
-        entry_price = open_ * (1 + SLIPPAGE)
+        # 스캔 당일 종가로 즉시 진입 (슬리피지 반영)
+        entry_price = close * (1 + SLIPPAGE)
         continue
 
       hold_days += 1
@@ -234,8 +233,10 @@ def update_coin_results() -> tuple[int, str]:
       if not scan_date:
         continue
 
+      # 코인은 스캔 당일 즉시 진입
       try:
-        entry_date = _next_day(scan_date)
+        fmt = "%Y%m%d" if "-" not in scan_date else "%Y-%m-%d"
+        entry_date = datetime.strptime(scan_date, fmt).strftime("%Y-%m-%d")
       except ValueError:
         continue
 

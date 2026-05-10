@@ -70,7 +70,7 @@ def render_stock_card(row: pd.Series) -> None:
         r1c1.metric(
             "매수 참고가 💰",
             f"{row['buy_price']:,}원",
-            delta="다음날 시초가 ±1%",
+            delta="스캔 즉시 시장가 진입",
             delta_color="off",
         )
         r1c2.metric("현재가", f"{int(row['close']):,}원")
@@ -162,11 +162,12 @@ def render_coin_card(row: pd.Series) -> None:
 
         with st.expander("📋 매매 가이드"):
             st.markdown(f"""
-- **진입 참고가**: {close:,.0f}원 (현재 종가 기준, 직접 시장가 주문)
+- **진입**: 스캔 확인 즉시 빗썸에서 **시장가 매수** (현재가 {close:,.0f}원 기준)
 - **익절 목표**: {tp:,.0f}원 (현재가 대비 **+{tp_pct}%**)
 - **손절 기준**: {sl:,.0f}원 (현재가 대비 **{sl_pct}%**)
 - **손익비**: {rr}:1
-- ⚠️ 빗썸 앱에서 수동으로 주문 — 이 신호는 참고용입니다
+- **보유 기간**: 단기 최대 5일 / 스윙 최대 10일
+- ⚠️ 코인은 24/7 거래 — 신호 확인 후 바로 진입, 지체할수록 가격 변화 발생
 """)
 
 
