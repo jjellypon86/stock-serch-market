@@ -41,7 +41,7 @@ _CFG: dict[str, object] = {
     },
   },
   "market": {
-    "min_24h_volume_krw": 10_000_000_000,
+    "min_24h_volume_krw": 500_000_000,
     "exclude_tickers": ["BTC"],
   },
   "fee": {
