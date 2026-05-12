@@ -20,7 +20,9 @@ _CFG: dict[str, object] = {
       "ma_long": 60,
       "pullback_window": 3,
       "pullback_band": 6.0,
+      "pullback_upper_mult": 0.5,
       "vol_decay_ratio": 0.70,
+      "vol_recovery_ratio": 1.05,
       "rsi_overbought": 75,
       "drawdown_from_high": -10.0,
       "tp_mult": 4.0,
@@ -32,7 +34,9 @@ _CFG: dict[str, object] = {
       "ma_long": 120,
       "pullback_window": 5,
       "pullback_band": 10.0,
+      "pullback_upper_mult": 0.5,
       "vol_decay_ratio": 0.70,
+      "vol_recovery_ratio": 1.05,
       "rsi_overbought": 75,
       "drawdown_from_high": -15.0,
       "tp_mult": 6.0,
@@ -128,7 +132,9 @@ def scan_coin_day(allow_neutral: bool = False) -> pd.DataFrame:
   ma_long: int = cfg["ma_long"]            # 60
   window: int = cfg["pullback_window"]     # 3
   band: float = cfg["pullback_band"]       # 6.0
+  upper_mult: float = cfg["pullback_upper_mult"]  # 0.5
   vol_ratio: float = cfg["vol_decay_ratio"]  # 0.70
+  recovery_ratio: float = cfg["vol_recovery_ratio"]  # 1.05
   rsi_ob: float = cfg["rsi_overbought"]    # 75
   drawdown_thresh: float = cfg["drawdown_from_high"]  # -10.0
   tp_mult: float = cfg["tp_mult"]
@@ -201,9 +207,9 @@ def scan_coin_day(allow_neutral: bool = False) -> pd.DataFrame:
       if _count_down_days(df, window) < window - 1:
         continue
 
-      # 필터 4: close가 MA20 기준 ±band% 이내 (위로는 band*0.3%까지만)
+      # 필터 4: close가 MA20 기준 ±band% 이내 (위로는 band*upper_mult까지)
       pullback_pct = (close - ma20) / ma20 * 100
-      if not (-band <= pullback_pct <= band * 0.3):
+      if not (-band <= pullback_pct <= band * upper_mult):
         continue
 
       # 필터 5: 고점 대비 하락률 >= drawdown_thresh (예: -10% 이상 빠져야 통과)
@@ -219,6 +225,10 @@ def scan_coin_day(allow_neutral: bool = False) -> pd.DataFrame:
       if vol_prev20.mean() == 0:
         continue
       vol_decay_score = bool(vol_window.mean() < vol_prev20.mean() * vol_ratio)
+
+      # 필터 6: 거래량 회복 신호 (수축 후 최근 1일 거래량 >= 수축 평균 × recovery_ratio)
+      if float(df["volume"].iloc[-1]) < vol_window.mean() * recovery_ratio:
+        continue
 
       # 필터 7: RSI 과매수 제외
       if rsi > rsi_ob:
@@ -281,7 +291,9 @@ def scan_coin_swing(allow_neutral: bool = False) -> pd.DataFrame:
   ma_long: int = cfg["ma_long"]            # 120
   window: int = cfg["pullback_window"]     # 5
   band: float = cfg["pullback_band"]       # 10.0
+  upper_mult: float = cfg["pullback_upper_mult"]  # 0.5
   vol_ratio: float = cfg["vol_decay_ratio"]  # 0.70
+  recovery_ratio: float = cfg["vol_recovery_ratio"]  # 1.05
   rsi_ob: float = cfg["rsi_overbought"]    # 75
   drawdown_thresh: float = cfg["drawdown_from_high"]  # -15.0
   tp_mult: float = cfg["tp_mult"]
@@ -354,9 +366,9 @@ def scan_coin_swing(allow_neutral: bool = False) -> pd.DataFrame:
       if _count_down_days(df, window) < window - 1:
         continue
 
-      # 필터 4: close가 MA60 기준 ±band% 이내 (위로는 band*0.3%까지만)
+      # 필터 4: close가 MA60 기준 ±band% 이내 (위로는 band*upper_mult까지)
       pullback_pct = (close - ma60) / ma60 * 100
-      if not (-band <= pullback_pct <= band * 0.3):
+      if not (-band <= pullback_pct <= band * upper_mult):
         continue
 
       # 필터 5: 고점 대비 하락률 >= drawdown_thresh (예: -15% 이상 빠져야 통과)
@@ -372,6 +384,10 @@ def scan_coin_swing(allow_neutral: bool = False) -> pd.DataFrame:
       if vol_prev20.mean() == 0:
         continue
       vol_decay_score = bool(vol_window.mean() < vol_prev20.mean() * vol_ratio)
+
+      # 필터 6: 거래량 회복 신호 (수축 후 최근 1일 거래량 >= 수축 평균 × recovery_ratio)
+      if float(df["volume"].iloc[-1]) < vol_window.mean() * recovery_ratio:
+        continue
 
       # 필터 7: RSI 과매수 제외
       if rsi > rsi_ob:
@@ -435,6 +451,9 @@ def scan_coin_day_debug(allow_neutral: bool = False) -> dict[str, int]:
   ma_long: int = cfg["ma_long"]
   window: int = cfg["pullback_window"]
   band: float = cfg["pullback_band"]
+  upper_mult: float = cfg["pullback_upper_mult"]
+  vol_ratio: float = cfg["vol_decay_ratio"]
+  recovery_ratio: float = cfg["vol_recovery_ratio"]
   rsi_ob: float = cfg["rsi_overbought"]
   drawdown_thresh: float = cfg["drawdown_from_high"]
 
@@ -443,7 +462,7 @@ def scan_coin_day_debug(allow_neutral: bool = False) -> dict[str, int]:
   listing_df = listing_df[~listing_df["ticker"].isin(exclude)].reset_index(drop=True)
 
   counts: dict[str, int] = {"0_입력": len(listing_df)}
-  f1 = f2 = f3 = f4 = f5 = f7 = 0
+  f1 = f2 = f3 = f4 = f5 = f6 = f7 = 0
 
   for ticker in listing_df["ticker"].tolist():
     try:
@@ -473,7 +492,7 @@ def scan_coin_day_debug(allow_neutral: bool = False) -> dict[str, int]:
         continue
       f3 += 1
       pullback_pct = (close - ma20) / ma20 * 100
-      if not (-band <= pullback_pct <= band * 0.3):
+      if not (-band <= pullback_pct <= band * upper_mult):
         continue
       f4 += 1
       recent_high = float(df["high"].iloc[-20:].max())
@@ -481,6 +500,13 @@ def scan_coin_day_debug(allow_neutral: bool = False) -> dict[str, int]:
       if drawdown > drawdown_thresh:
         continue
       f5 += 1
+      vol_window = df["volume"].iloc[-window:]
+      vol_prev20 = df["volume"].iloc[-(20 + window):-window]
+      if vol_prev20.mean() == 0:
+        continue
+      if float(df["volume"].iloc[-1]) < vol_window.mean() * recovery_ratio:
+        continue
+      f6 += 1
       if rsi > rsi_ob:
         continue
       f7 += 1
@@ -494,6 +520,7 @@ def scan_coin_day_debug(allow_neutral: bool = False) -> dict[str, int]:
     "3_눌림하락일": f3,
     "4_MA밴드근접": f4,
     "5_고점하락": f5,
+    "6_거래량회복": f6,
     "7_RSI": f7,
   })
   return counts
@@ -515,6 +542,9 @@ def scan_coin_swing_debug(allow_neutral: bool = False) -> dict[str, int]:
   ma_long: int = cfg["ma_long"]
   window: int = cfg["pullback_window"]
   band: float = cfg["pullback_band"]
+  upper_mult: float = cfg["pullback_upper_mult"]
+  vol_ratio: float = cfg["vol_decay_ratio"]
+  recovery_ratio: float = cfg["vol_recovery_ratio"]
   rsi_ob: float = cfg["rsi_overbought"]
   drawdown_thresh: float = cfg["drawdown_from_high"]
 
@@ -523,7 +553,7 @@ def scan_coin_swing_debug(allow_neutral: bool = False) -> dict[str, int]:
   listing_df = listing_df[~listing_df["ticker"].isin(exclude)].reset_index(drop=True)
 
   counts: dict[str, int] = {"0_입력": len(listing_df)}
-  f1 = f2 = f3 = f4 = f5 = f7 = 0
+  f1 = f2 = f3 = f4 = f5 = f6 = f7 = 0
 
   for ticker in listing_df["ticker"].tolist():
     try:
@@ -553,7 +583,7 @@ def scan_coin_swing_debug(allow_neutral: bool = False) -> dict[str, int]:
         continue
       f3 += 1
       pullback_pct = (close - ma60) / ma60 * 100
-      if not (-band <= pullback_pct <= band * 0.3):
+      if not (-band <= pullback_pct <= band * upper_mult):
         continue
       f4 += 1
       recent_high = float(df["high"].iloc[-20:].max())
@@ -561,6 +591,13 @@ def scan_coin_swing_debug(allow_neutral: bool = False) -> dict[str, int]:
       if drawdown > drawdown_thresh:
         continue
       f5 += 1
+      vol_window = df["volume"].iloc[-window:]
+      vol_prev20 = df["volume"].iloc[-(20 + window):-window]
+      if vol_prev20.mean() == 0:
+        continue
+      if float(df["volume"].iloc[-1]) < vol_window.mean() * recovery_ratio:
+        continue
+      f6 += 1
       if rsi > rsi_ob:
         continue
       f7 += 1
@@ -574,6 +611,7 @@ def scan_coin_swing_debug(allow_neutral: bool = False) -> dict[str, int]:
     "3_눌림하락일": f3,
     "4_MA밴드근접": f4,
     "5_고점하락": f5,
+    "6_거래량회복": f6,
     "7_RSI": f7,
   })
   return counts
