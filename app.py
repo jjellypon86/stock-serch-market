@@ -10,7 +10,12 @@ from utils import get_last_trading_date, get_market_direction, get_stock_news
 
 _COIN_SCANNER_ERR: str = ""
 try:
-    from coin_scanner import scan_coin_day, scan_coin_swing
+    from coin_scanner import (
+        scan_coin_day,
+        scan_coin_day_debug,
+        scan_coin_swing,
+        scan_coin_swing_debug,
+    )
     _COIN_SCANNER_OK = True
 except Exception as _e:
     _COIN_SCANNER_OK = False
@@ -50,6 +55,14 @@ if "df_coin_day" not in st.session_state:
     st.session_state.df_coin_day = pd.DataFrame()
 if "df_coin_swing" not in st.session_state:
     st.session_state.df_coin_swing = pd.DataFrame()
+if "last_scan_coin_day_time" not in st.session_state:
+    st.session_state.last_scan_coin_day_time = None
+if "last_scan_coin_swing_time" not in st.session_state:
+    st.session_state.last_scan_coin_swing_time = None
+if "debug_coin_day" not in st.session_state:
+    st.session_state.debug_coin_day: dict[str, int] = {}
+if "debug_coin_swing" not in st.session_state:
+    st.session_state.debug_coin_swing: dict[str, int] = {}
 
 tab_day, tab_swing, tab_backtest, tab_verify, tab_coin_day, tab_coin_swing, tab_coin_verify = st.tabs([
     "📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트", "📈 검증",
@@ -126,6 +139,35 @@ def render_btc_banner() -> None:
         st.error("🔴 BTC 하락 추세 — 스캔 중단 (BTC MA60 이하), 신호 신뢰도 낮음")
     else:
         st.warning("🟡 BTC 중립 — BTC MA20~MA60 사이, 선택적 진입")
+
+
+def render_coin_scan_time(last_time: datetime | None) -> None:
+    """마지막 스캔 시간과 오늘 스캔 완료 여부 표시"""
+    if last_time is None:
+        st.caption("⚠️ 아직 스캔 전 — 매일 오전 9시 이후 스캔 권장")
+        return
+    time_str = last_time.strftime("%Y-%m-%d %H:%M")
+    if last_time.date() == datetime.now().date():
+        st.caption(f"✅ 오늘 스캔 완료 — 마지막 스캔: {time_str}")
+    else:
+        st.caption(f"⚠️ 오늘 스캔 전 — 마지막 스캔: {time_str}")
+
+
+def render_coin_filter_debug(debug: dict[str, int]) -> None:
+    """필터 진단 expander: 각 필터 통과 코인 수 표시"""
+    with st.expander("🔍 필터 진단 — 어느 단계에서 코인이 탈락하는가"):
+        if not debug:
+            st.info("스캔을 실행하면 필터 진단 결과가 여기에 표시됩니다.")
+            return
+        if "BTC방향_차단" in debug:
+            st.error("BTC 방향 조건 미충족으로 스캔이 실행되지 않았습니다.")
+            return
+        rows = [{"필터 단계": k, "통과 코인 수": v} for k, v in debug.items()]
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        total = debug.get("0_입력", 0)
+        final = debug.get("7_RSI", 0)
+        if total > 0:
+            st.caption(f"전체 {total}개 코인 중 최종 {final}개 통과 ({final/total*100:.1f}%)")
 
 
 def render_coin_card(row: pd.Series) -> None:
@@ -651,12 +693,21 @@ with tab_coin_day:
     render_btc_banner()
     st.subheader("코인 단기 — MA20 눌림목 스캔")
 
+    render_coin_scan_time(st.session_state.last_scan_coin_day_time)
+
+    allow_neutral_day = st.checkbox(
+        "BTC 중립 시장도 허용 (신호 증가, 리스크 상승)",
+        key="allow_neutral_coin_day",
+    )
+
     if not _COIN_SCANNER_OK:
         st.error(f"coin_scanner 로드 실패: {_COIN_SCANNER_ERR}")
     else:
         if st.button("🔍 코인 단기 스캔", key="btn_coin_day"):
             with st.spinner("코인 스캔 중..."):
-                st.session_state.df_coin_day = scan_coin_day()
+                st.session_state.df_coin_day = scan_coin_day(allow_neutral=allow_neutral_day)
+                st.session_state.last_scan_coin_day_time = datetime.now()
+                st.session_state.debug_coin_day = scan_coin_day_debug(allow_neutral=allow_neutral_day)
 
     df_coin_day = st.session_state.df_coin_day
 
@@ -684,18 +735,29 @@ with tab_coin_day:
             available = [c for c in display_cols if c in df_coin_day.columns]
             st.dataframe(df_coin_day[available], use_container_width=True)
 
+    render_coin_filter_debug(st.session_state.debug_coin_day)
+
 
 # ── 코인 스윙 탭 ─────────────────────────────────────────────────────────────
 with tab_coin_swing:
     render_btc_banner()
     st.subheader("코인 스윙 — MA60 눌림목 스캔")
 
+    render_coin_scan_time(st.session_state.last_scan_coin_swing_time)
+
+    allow_neutral_swing = st.checkbox(
+        "BTC 중립 시장도 허용 (신호 증가, 리스크 상승)",
+        key="allow_neutral_coin_swing",
+    )
+
     if not _COIN_SCANNER_OK:
         st.error(f"coin_scanner 로드 실패: {_COIN_SCANNER_ERR}")
     else:
         if st.button("🔍 코인 스윙 스캔", key="btn_coin_swing"):
             with st.spinner("코인 스캔 중..."):
-                st.session_state.df_coin_swing = scan_coin_swing()
+                st.session_state.df_coin_swing = scan_coin_swing(allow_neutral=allow_neutral_swing)
+                st.session_state.last_scan_coin_swing_time = datetime.now()
+                st.session_state.debug_coin_swing = scan_coin_swing_debug(allow_neutral=allow_neutral_swing)
 
     df_coin_swing = st.session_state.df_coin_swing
 
@@ -722,6 +784,8 @@ with tab_coin_swing:
             display_cols = ["ticker", "close", "take_profit", "stop_loss", "risk_reward", "pullback_pct", "rsi", "volume_24h"]
             available = [c for c in display_cols if c in df_coin_swing.columns]
             st.dataframe(df_coin_swing[available], use_container_width=True)
+
+    render_coin_filter_debug(st.session_state.debug_coin_swing)
 
 
 # ── 코인 검증 탭 ─────────────────────────────────────────────────────────────
