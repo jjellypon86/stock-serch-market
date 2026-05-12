@@ -112,14 +112,15 @@ def _select_best3_coin(df: pd.DataFrame) -> pd.DataFrame:
   return df.nlargest(3, "_score").drop(columns="_score").reset_index(drop=True)
 
 
-def scan_coin_day() -> pd.DataFrame:
+def scan_coin_day(allow_neutral: bool = False) -> pd.DataFrame:
   """단기 코인 눌림목 스캔 (MA20 기준).
 
   7가지 필터를 모두 통과한 종목에 가중치 스코어를 적용해 상위 3개 반환.
-  BTC 시장 방향이 '상승'이 아니면 빈 DataFrame 반환.
+  allow_neutral=False이면 BTC '상승'일 때만, True이면 '중립'도 허용.
   """
-  # BTC 시장 방향 확인
-  if get_btc_direction() != "상승":
+  btc = get_btc_direction()
+  allowed: set[str] = {"상승"} | ({"중립"} if allow_neutral else set())
+  if btc not in allowed:
     return pd.DataFrame()
 
   cfg = _CFG["strategy"]["day"]
@@ -246,7 +247,7 @@ def scan_coin_day() -> pd.DataFrame:
         "volume_24h": float(listing_map.get(ticker, {}).get("volume_24h", 0)),
         "rsi": round(rsi, 1),
         "atr": round(atr, 4),
-        "btc_direction": "상승",
+        "btc_direction": btc,
       })
 
     except Exception:
@@ -264,14 +265,15 @@ def scan_coin_day() -> pd.DataFrame:
   return _select_best3_coin(pd.DataFrame(results))
 
 
-def scan_coin_swing() -> pd.DataFrame:
+def scan_coin_swing(allow_neutral: bool = False) -> pd.DataFrame:
   """스윙 코인 눌림목 스캔 (MA60 기준).
 
   7가지 필터를 모두 통과한 종목에 가중치 스코어를 적용해 상위 3개 반환.
-  BTC 시장 방향이 '상승'이 아니면 빈 DataFrame 반환.
+  allow_neutral=False이면 BTC '상승'일 때만, True이면 '중립'도 허용.
   """
-  # BTC 시장 방향 확인
-  if get_btc_direction() != "상승":
+  btc = get_btc_direction()
+  allowed: set[str] = {"상승"} | ({"중립"} if allow_neutral else set())
+  if btc not in allowed:
     return pd.DataFrame()
 
   cfg = _CFG["strategy"]["swing"]
@@ -398,7 +400,7 @@ def scan_coin_swing() -> pd.DataFrame:
         "volume_24h": float(listing_map.get(ticker, {}).get("volume_24h", 0)),
         "rsi": round(rsi, 1),
         "atr": round(atr, 4),
-        "btc_direction": "상승",
+        "btc_direction": btc,
       })
 
     except Exception:
@@ -414,3 +416,164 @@ def scan_coin_swing() -> pd.DataFrame:
     return pd.DataFrame()
 
   return _select_best3_coin(pd.DataFrame(results))
+
+
+def scan_coin_day_debug(allow_neutral: bool = False) -> dict[str, int]:
+  """단기 스캔 필터별 통과 코인 수 반환 (진단용).
+
+  반환 예: {"0_입력": 45, "1_추세": 20, ..., "7_RSI": 1}
+  BTC 방향 조건 불충족 시 {"BTC방향_차단": 0} 반환.
+  API 캐시(ttl=3600)를 재사용하므로 스캔 직후 호출 시 빠르게 동작.
+  """
+  btc = get_btc_direction()
+  allowed: set[str] = {"상승"} | ({"중립"} if allow_neutral else set())
+  if btc not in allowed:
+    return {"BTC방향_차단": 0}
+
+  cfg = _CFG["strategy"]["day"]
+  ma_short: int = cfg["ma_short"]
+  ma_long: int = cfg["ma_long"]
+  window: int = cfg["pullback_window"]
+  band: float = cfg["pullback_band"]
+  rsi_ob: float = cfg["rsi_overbought"]
+  drawdown_thresh: float = cfg["drawdown_from_high"]
+
+  listing_df = get_coin_listing(min_volume_krw=_CFG["market"]["min_24h_volume_krw"])
+  exclude: list[str] = _CFG["market"].get("exclude_tickers", [])
+  listing_df = listing_df[~listing_df["ticker"].isin(exclude)].reset_index(drop=True)
+
+  counts: dict[str, int] = {"0_입력": len(listing_df)}
+  f1 = f2 = f3 = f4 = f5 = f7 = 0
+
+  for ticker in listing_df["ticker"].tolist():
+    try:
+      df = get_ohlcv_coin(ticker, count=200)
+      if df.empty or len(df) < 130:
+        continue
+      df = add_moving_averages(df)
+      df = add_atr(df)
+      df = add_rsi(df)
+      df = df.dropna(subset=[f"MA{ma_short}", f"MA{ma_long}", "ATR", "RSI"])
+      if len(df) < window + 2:
+        continue
+
+      close = float(df["close"].iloc[-1])
+      ma20 = float(df[f"MA{ma_short}"].iloc[-1])
+      ma60 = float(df[f"MA{ma_long}"].iloc[-1])
+      ma20_prev = float(df[f"MA{ma_short}"].iloc[-2])
+      rsi = float(df["RSI"].iloc[-1])
+
+      if not (close > ma20 > ma60):
+        continue
+      f1 += 1
+      if ma20 <= ma20_prev:
+        continue
+      f2 += 1
+      if _count_down_days(df, window) < window - 1:
+        continue
+      f3 += 1
+      pullback_pct = (close - ma20) / ma20 * 100
+      if not (-band <= pullback_pct <= band * 0.3):
+        continue
+      f4 += 1
+      recent_high = float(df["high"].iloc[-20:].max())
+      drawdown = (close - recent_high) / recent_high * 100
+      if drawdown > drawdown_thresh:
+        continue
+      f5 += 1
+      if rsi > rsi_ob:
+        continue
+      f7 += 1
+
+    except Exception:
+      continue
+
+  counts.update({
+    "1_추세(MA정배열)": f1,
+    "2_MA우상향": f2,
+    "3_눌림하락일": f3,
+    "4_MA밴드근접": f4,
+    "5_고점하락": f5,
+    "7_RSI": f7,
+  })
+  return counts
+
+
+def scan_coin_swing_debug(allow_neutral: bool = False) -> dict[str, int]:
+  """스윙 스캔 필터별 통과 코인 수 반환 (진단용).
+
+  반환 예: {"0_입력": 45, "1_추세": 20, ..., "7_RSI": 1}
+  BTC 방향 조건 불충족 시 {"BTC방향_차단": 0} 반환.
+  """
+  btc = get_btc_direction()
+  allowed: set[str] = {"상승"} | ({"중립"} if allow_neutral else set())
+  if btc not in allowed:
+    return {"BTC방향_차단": 0}
+
+  cfg = _CFG["strategy"]["swing"]
+  ma_short: int = cfg["ma_short"]
+  ma_long: int = cfg["ma_long"]
+  window: int = cfg["pullback_window"]
+  band: float = cfg["pullback_band"]
+  rsi_ob: float = cfg["rsi_overbought"]
+  drawdown_thresh: float = cfg["drawdown_from_high"]
+
+  listing_df = get_coin_listing(min_volume_krw=_CFG["market"]["min_24h_volume_krw"])
+  exclude: list[str] = _CFG["market"].get("exclude_tickers", [])
+  listing_df = listing_df[~listing_df["ticker"].isin(exclude)].reset_index(drop=True)
+
+  counts: dict[str, int] = {"0_입력": len(listing_df)}
+  f1 = f2 = f3 = f4 = f5 = f7 = 0
+
+  for ticker in listing_df["ticker"].tolist():
+    try:
+      df = get_ohlcv_coin(ticker, count=200)
+      if df.empty or len(df) < 130:
+        continue
+      df = add_moving_averages(df)
+      df = add_atr(df)
+      df = add_rsi(df)
+      df = df.dropna(subset=[f"MA{ma_short}", f"MA{ma_long}", "ATR", "RSI"])
+      if len(df) < window + 2:
+        continue
+
+      close = float(df["close"].iloc[-1])
+      ma60 = float(df[f"MA{ma_short}"].iloc[-1])
+      ma120 = float(df[f"MA{ma_long}"].iloc[-1])
+      ma60_prev = float(df[f"MA{ma_short}"].iloc[-2])
+      rsi = float(df["RSI"].iloc[-1])
+
+      if not (close > ma60 > ma120):
+        continue
+      f1 += 1
+      if ma60 <= ma60_prev:
+        continue
+      f2 += 1
+      if _count_down_days(df, window) < window - 1:
+        continue
+      f3 += 1
+      pullback_pct = (close - ma60) / ma60 * 100
+      if not (-band <= pullback_pct <= band * 0.3):
+        continue
+      f4 += 1
+      recent_high = float(df["high"].iloc[-20:].max())
+      drawdown = (close - recent_high) / recent_high * 100
+      if drawdown > drawdown_thresh:
+        continue
+      f5 += 1
+      if rsi > rsi_ob:
+        continue
+      f7 += 1
+
+    except Exception:
+      continue
+
+  counts.update({
+    "1_추세(MA정배열)": f1,
+    "2_MA우상향": f2,
+    "3_눌림하락일": f3,
+    "4_MA밴드근접": f4,
+    "5_고점하락": f5,
+    "7_RSI": f7,
+  })
+  return counts
