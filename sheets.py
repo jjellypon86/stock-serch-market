@@ -319,7 +319,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
 
         # 메타데이터
         rows += [
-            ["== 분석 메타데이터 =="],
+            ["▶ 분석 메타데이터"],
             ["분석일",      report["analysis_date"]],
             ["데이터 기간", stats.get("date_range", "-")],
             ["분석 대상",
@@ -330,14 +330,14 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
 
         # 1. 전체 성과 통계
         rows += [
-            ["== 1. 전체 성과 통계 =="],
+            ["▶ 1. 전체 성과 통계"],
             ["승률(%)", "기대값(%)", "MDD(%)", "손익비"],
             [stats["win_rate"], stats["expectancy"], stats["mdd"], stats["pl_ratio"]],
             [],
         ]
 
         # 2. WIN vs LOSS 지표 비교
-        rows.append(["== 2. WIN vs LOSS 지표 비교 =="])
+        rows.append(["▶ 2. WIN vs LOSS 지표 비교"])
         cmp_df = report.get("group_comparison")
         if cmp_df is not None and not cmp_df.empty:
             rows.append(list(cmp_df.columns))
@@ -346,7 +346,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
         rows.append([])
 
         # 3. 전략×시장별 성과
-        rows.append(["== 3. 전략×시장별 성과 =="])
+        rows.append(["▶ 3. 전략×시장별 성과"])
         seg_df = report.get("segment_stats")
         if seg_df is not None and not seg_df.empty:
             rows.append(list(seg_df.columns))
@@ -355,7 +355,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
         rows.append([])
 
         # 4. 파라미터 조정 권고
-        rows.append(["== 4. 파라미터 조정 권고 =="])
+        rows.append(["▶ 4. 파라미터 조정 권고"])
         rows.append(["항목", "현재값", "권고값", "근거"])
         pb = report.get("pullback_result", {})
         if abs(pb.get("recommend_band", 3.0) - pb.get("current_band", 3.0)) >= 0.5:
@@ -376,7 +376,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
         rows.append([])
 
         # 5. 가중치 재조정 제안
-        rows.append(["== 5. 가중치 재조정 제안 =="])
+        rows.append(["▶ 5. 가중치 재조정 제안"])
         rows.append(["지표", "현재 가중치", "제안 가중치", "상관계수"])
         wt = report.get("weight_result", {})
         for key in wt.get("current_weights", {}):
@@ -389,7 +389,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
         rows.append([])
 
         # 6. 종목별 실패 원인 분석
-        rows.append(["== 6. 종목별 실패 원인 분석 =="])
+        rows.append(["▶ 6. 종목별 실패 원인 분석"])
         rows.append(["종목코드", "종목명", "결과", "1차 원인", "개선 제안"])
         for fa in report.get("failure_analysis", []):
             rows.append([
@@ -402,7 +402,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
         rows.append([])
 
         # 7. 핵심 권고사항
-        rows.append(["== 7. 핵심 권고사항 =="])
+        rows.append(["▶ 7. 핵심 권고사항"])
         rows.append(["우선순위", "파라미터", "현재값", "권고값", "예상 효과"])
         for rec in report.get("recommendations", []):
             rows.append([
