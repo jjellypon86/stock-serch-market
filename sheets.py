@@ -278,6 +278,20 @@ def evaluate_strategy(df_done: pd.DataFrame) -> dict:
     }
 
 
+def _safe_val(v: object) -> object:
+    """NaN/Inf → 빈 문자열 변환 (gspread JSON 직렬화 오류 방지)"""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return v
+
+
+def _safe_rows(rows: list[list]) -> list[list]:
+    return [[_safe_val(cell) for cell in row] for row in rows]
+
+
 def save_analysis_report(report: dict) -> tuple[str, str]:
     """분석 리포트를 Sheets 새 탭에 저장. 반환: (탭 이름, 에러 메시지)"""
     if not _is_configured():
@@ -399,7 +413,7 @@ def save_analysis_report(report: dict) -> tuple[str, str]:
                 rec.get("effect", ""),
             ])
 
-        ws.append_rows(rows, value_input_option="USER_ENTERED")
+        ws.append_rows(_safe_rows(rows), value_input_option="USER_ENTERED")
         return tab_name, ""
 
     except Exception as e:
