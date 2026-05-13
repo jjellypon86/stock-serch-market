@@ -5,7 +5,8 @@ import streamlit as st
 
 from backtest import run_backtest
 from scanner import scan_day_trading, scan_swing
-from sheets import evaluate_strategy, is_configured, load_history, save_scan_results, update_results
+from analysis import run_full_analysis
+from sheets import evaluate_strategy, is_configured, load_history, save_analysis_report, save_scan_results, update_results
 from utils import get_last_trading_date, get_market_direction, get_stock_news
 
 _COIN_SCANNER_ERR: str = ""
@@ -476,16 +477,49 @@ with tab_verify:
     if not is_configured():
         st.warning("Google Sheets가 연동되지 않았습니다. Streamlit Cloud Secrets에 `gcp_service_account`를 설정해 주세요.")
     else:
-        if st.button("🔄 결과 업데이트", key="btn_update"):
-            with st.spinner("미완료 종목 결과 자동 판정 중..."):
-                n, err = update_results()
-            if err:
-                st.error(f"업데이트 오류: {err}")
-            elif n > 0:
-                load_history.clear()
-                st.success(f"{n}개 종목 결과 업데이트 완료")
-            else:
-                st.info("업데이트할 항목이 없습니다.")
+        btn_col1, btn_col2 = st.columns(2)
+
+        with btn_col1:
+            if st.button("🔄 결과 업데이트", key="btn_update"):
+                with st.spinner("미완료 종목 결과 자동 판정 중..."):
+                    n, err = update_results()
+                if err:
+                    st.error(f"업데이트 오류: {err}")
+                elif n > 0:
+                    load_history.clear()
+                    st.success(f"{n}개 종목 결과 업데이트 완료")
+                else:
+                    st.info("업데이트할 항목이 없습니다.")
+
+        with btn_col2:
+            if st.button("🔭 전략 분석 실행", key="btn_analysis", type="primary"):
+                df_for_analysis = load_history()
+                if df_for_analysis.empty:
+                    st.warning("히스토리 데이터가 없습니다. 스캔을 먼저 실행해 주세요.")
+                else:
+                    with st.spinner("분석 중... LOSS/EXPIRED 종목별 OHLCV 조회 포함, 수십 초 소요될 수 있습니다."):
+                        report, analysis_err = run_full_analysis(df_for_analysis)
+                    if analysis_err:
+                        st.warning(analysis_err)
+                    else:
+                        with st.spinner("Sheets에 리포트 저장 중..."):
+                            tab_name, save_err = save_analysis_report(report)
+                        if save_err:
+                            st.error(f"Sheets 저장 오류: {save_err}")
+                        else:
+                            st.success(f"분석 완료! Sheets '{tab_name}' 탭에 저장되었습니다.")
+                        # 요약 결과 표시
+                        s = report["overall_stats"]
+                        a1, a2, a3 = st.columns(3)
+                        a1.metric("승률", f"{s['win_rate']:.1f}%")
+                        a2.metric("기대값", f"{s['expectancy']:+.2f}%")
+                        a3.metric("핵심 권고", f"{len(report['recommendations'])}건")
+                        for rec in report["recommendations"]:
+                            st.info(
+                                f"[{rec['priority']}순위] **{rec['param']}**: "
+                                f"{rec['current']} → {rec['suggested']} "
+                                f"({rec['reason']})"
+                            )
 
         df_hist = load_history()
 

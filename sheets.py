@@ -278,5 +278,133 @@ def evaluate_strategy(df_done: pd.DataFrame) -> dict:
     }
 
 
+def save_analysis_report(report: dict) -> tuple[str, str]:
+    """분석 리포트를 Sheets 새 탭에 저장. 반환: (탭 이름, 에러 메시지)"""
+    if not _is_configured():
+        return "", "gcp_service_account secrets 미설정"
+
+    try:
+        creds = Credentials.from_service_account_info(
+            st.secrets["gcp_service_account"], scopes=SCOPES
+        )
+        gc = gspread.authorize(creds)
+        sh = gc.open(SHEET_NAME)
+
+        tab_name = f"분석_{report['analysis_date'].replace('-', '')}"
+
+        # 동일 날짜 탭 이미 있으면 삭제 후 재생성
+        try:
+            sh.del_worksheet(sh.worksheet(tab_name))
+        except gspread.WorksheetNotFound:
+            pass
+
+        ws = sh.add_worksheet(title=tab_name, rows=300, cols=10)
+
+        stats = report["overall_stats"]
+        rows: list[list] = []
+
+        # 메타데이터
+        rows += [
+            ["== 분석 메타데이터 =="],
+            ["분석일",      report["analysis_date"]],
+            ["데이터 기간", stats.get("date_range", "-")],
+            ["분석 대상",
+             f"WIN {stats['wins']}건 / LOSS {stats['losses']}건 / "
+             f"EXPIRED {stats['expired']}건 / 합계 {stats['total']}건"],
+            [],
+        ]
+
+        # 1. 전체 성과 통계
+        rows += [
+            ["== 1. 전체 성과 통계 =="],
+            ["승률(%)", "기대값(%)", "MDD(%)", "손익비"],
+            [stats["win_rate"], stats["expectancy"], stats["mdd"], stats["pl_ratio"]],
+            [],
+        ]
+
+        # 2. WIN vs LOSS 지표 비교
+        rows.append(["== 2. WIN vs LOSS 지표 비교 =="])
+        cmp_df = report.get("group_comparison")
+        if cmp_df is not None and not cmp_df.empty:
+            rows.append(list(cmp_df.columns))
+            for _, r in cmp_df.iterrows():
+                rows.append([str(v) for v in r.tolist()])
+        rows.append([])
+
+        # 3. 전략×시장별 성과
+        rows.append(["== 3. 전략×시장별 성과 =="])
+        seg_df = report.get("segment_stats")
+        if seg_df is not None and not seg_df.empty:
+            rows.append(list(seg_df.columns))
+            for _, r in seg_df.iterrows():
+                rows.append([str(v) for v in r.tolist()])
+        rows.append([])
+
+        # 4. 파라미터 조정 권고
+        rows.append(["== 4. 파라미터 조정 권고 =="])
+        rows.append(["항목", "현재값", "권고값", "근거"])
+        pb = report.get("pullback_result", {})
+        if abs(pb.get("recommend_band", 3.0) - pb.get("current_band", 3.0)) >= 0.5:
+            rows.append([
+                "pullback_band",
+                f"{pb['current_band']}%",
+                f"{pb['recommend_band']}%",
+                "WIN율 최고 구간 기준",
+            ])
+        sup = report.get("supply_result", {})
+        if sup.get("recommend_min", 2) > sup.get("current_min", 2):
+            rows.append([
+                "수급 필터",
+                f"합계 >= {sup['current_min']}",
+                f"합계 >= {sup['recommend_min']}",
+                "WIN율 55% 이상 구간",
+            ])
+        rows.append([])
+
+        # 5. 가중치 재조정 제안
+        rows.append(["== 5. 가중치 재조정 제안 =="])
+        rows.append(["지표", "현재 가중치", "제안 가중치", "상관계수"])
+        wt = report.get("weight_result", {})
+        for key in wt.get("current_weights", {}):
+            rows.append([
+                key,
+                wt["current_weights"].get(key, "-"),
+                wt.get("suggested_weights", {}).get(key, "-"),
+                wt.get("correlations", {}).get(key, "-"),
+            ])
+        rows.append([])
+
+        # 6. 종목별 실패 원인 분석
+        rows.append(["== 6. 종목별 실패 원인 분석 =="])
+        rows.append(["종목코드", "종목명", "결과", "1차 원인", "개선 제안"])
+        for fa in report.get("failure_analysis", []):
+            rows.append([
+                fa.get("ticker", ""),
+                fa.get("name", ""),
+                fa.get("result", ""),
+                fa.get("primary_reason", ""),
+                fa.get("suggestion", ""),
+            ])
+        rows.append([])
+
+        # 7. 핵심 권고사항
+        rows.append(["== 7. 핵심 권고사항 =="])
+        rows.append(["우선순위", "파라미터", "현재값", "권고값", "예상 효과"])
+        for rec in report.get("recommendations", []):
+            rows.append([
+                rec.get("priority", ""),
+                rec.get("param", ""),
+                rec.get("current", ""),
+                rec.get("suggested", ""),
+                rec.get("effect", ""),
+            ])
+
+        ws.append_rows(rows, value_input_option="USER_ENTERED")
+        return tab_name, ""
+
+    except Exception as e:
+        return "", str(e)
+
+
 def is_configured() -> bool:
     return _is_configured()
