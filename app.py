@@ -494,6 +494,10 @@ with tab_verify:
         with btn_col2:
             if st.button("🔭 전략 분석 실행", key="btn_analysis", type="primary"):
                 df_for_analysis = load_history()
+                if "strategy_ver" in df_for_analysis.columns:
+                    latest_ver = df_for_analysis["strategy_ver"].dropna()
+                    if not latest_ver.empty:
+                        df_for_analysis = df_for_analysis[df_for_analysis["strategy_ver"] == latest_ver.iloc[-1]]
                 if df_for_analysis.empty:
                     st.warning("히스토리 데이터가 없습니다. 스캔을 먼저 실행해 주세요.")
                 else:
@@ -522,6 +526,13 @@ with tab_verify:
                             )
 
         df_hist = load_history()
+
+        # 전략 버전 필터
+        if not df_hist.empty and "strategy_ver" in df_hist.columns:
+            versions = ["전체"] + sorted(df_hist["strategy_ver"].dropna().unique().tolist(), reverse=True)
+            sel_ver = st.selectbox("전략 버전 필터", versions, key="ver_filter")
+            if sel_ver != "전체":
+                df_hist = df_hist[df_hist["strategy_ver"] == sel_ver]
 
         if df_hist.empty:
             st.info("저장된 히스토리가 없습니다. 스캔을 먼저 실행해 주세요.")

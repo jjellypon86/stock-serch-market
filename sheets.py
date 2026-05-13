@@ -5,6 +5,10 @@ from datetime import datetime, timedelta
 import FinanceDataReader as fdr
 import pandas as pd
 import streamlit as st
+import yaml
+
+with open("config.yaml") as _f:
+    _scfg = yaml.safe_load(_f)
 
 try:
     from google.oauth2.service_account import Credentials
@@ -24,6 +28,7 @@ COLUMNS = [
     "inst_days", "foreign_days",
     "result", "profit_pct", "hold_days",
     "actual_buy",
+    "strategy_ver",
 ]
 
 DAY_MAX_HOLD   = 5
@@ -89,6 +94,7 @@ def save_scan_results(df: pd.DataFrame, strategy: str, market: str, scan_date: s
                 int(r.get("inst_days", 0)), int(r.get("foreign_days", 0)),
                 "", "", "",
                 "",
+                _scfg["strategy"]["version"],
             ])
 
         if rows:

@@ -1,6 +1,9 @@
 # K-Quant 전략 상수 관리
 # 각 모듈에서 yaml.safe_load()로 로드하여 사용
 
+strategy:
+  version: "v2"   # 파라미터 변경 시 수동으로 올림 (v1: 구 전략, v2: 2026-05-13~)
+
 market:
   min_market_cap: 100_000_000_000   # 시가총액 하한 (1000억)
   day_min_trade:  5_000_000_000     # 단기 거래대금 하한 (50억)
