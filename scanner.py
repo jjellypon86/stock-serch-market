@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
+import yaml
 
 from utils import (
     add_atr,
@@ -12,31 +13,32 @@ from utils import (
     get_stock_listing,
 )
 
+with open("config.yaml") as _f:
+    _cfg = yaml.safe_load(_f)
+
 MIN_MARKET_CAP   = 100_000_000_000  # 시가총액 1000억 하한선 (소형주 수급 데이터 신뢰도)
 DAY_MIN_TRADE    = 5_000_000_000   # 단기 거래대금 50억↑
 SWING_MIN_TRADE  = 10_000_000_000  # 스윙 거래대금 100억↑
 
-DAY_TP_MULT = 2.0
-DAY_SL_MULT = 1.0
-SWING_TP_MULT = 3.0
-SWING_SL_MULT = 1.5
-
-# 눌림목 허용 범위: MA 기준 ±3%
-PULLBACK_BAND = 0.03
+DAY_TP_MULT = _cfg["scanner"]["day"]["tp_mult"]
+DAY_SL_MULT = _cfg["scanner"]["day"]["sl_mult"]
+SWING_TP_MULT = _cfg["scanner"]["swing"]["tp_mult"]
+SWING_SL_MULT = _cfg["scanner"]["swing"]["sl_mult"]
 
 
 def _select_best3(df: pd.DataFrame) -> pd.DataFrame:
-    """수급(30%)·손익비(25%)·눌림률(15%)·추세품질(20%)·RSI구간(10%) 가중 점수로 상위 3개 반환"""
+    """수급·손익비·눌림률·추세품질·RSI구간 가중 점수로 상위 3개 반환 (가중치는 config.yaml 참조)"""
     if df.empty:
         return df
     df = df.copy()
-    trend_score = df["vol_consec_drop"].astype(int) * 20
+    w = _cfg["weights"]
+    trend_score = df["vol_consec_drop"].astype(int) * w["trend_quality"]
     df["_score"] = (
-        (df["inst_days"] + df["foreign_days"]) / 6 * 30
-        + df["risk_reward"].clip(upper=3.0) / 3.0 * 25
-        + (1 - df["pullback_pct"].abs() / 5.0).clip(lower=0) * 15
+        (df["inst_days"] + df["foreign_days"]) / 6 * w["supply"]
+        + df["risk_reward"].clip(upper=3.0) / 3.0 * w["risk_reward"]
+        + (1 - df["pullback_pct"].abs() / 5.0).clip(lower=0) * w["pullback"]
         + trend_score
-        + df["rsi_score"] / 10.0 * 10
+        + df["rsi_score"] / 10.0 * w["rsi_score"]
     )
     return df.nlargest(3, "_score").drop(columns="_score").reset_index(drop=True)
 
@@ -121,13 +123,14 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         if _count_down_days(df, window=3) < 2:
             continue
 
-        # ③ MA20 -3~+1% 이내 (MA20 살짝 아래까지 허용)
+        # ③ MA20 ±band% 이내 (MA20 살짝 아래까지 허용)
+        band_pct = _cfg["scanner"]["pullback_band"] * 100
         pullback_pct = (close - ma20) / ma20 * 100
-        if not (-3.0 <= pullback_pct <= 1.0):
+        if not (-band_pct <= pullback_pct <= 1.0):
             continue
 
-        # MA20 우상향 필터 (지지선 역할 확인)
-        if df["MA20"].iloc[-1] <= df["MA20"].iloc[-2]:
+        # MA20 연속 3일 우상향 필터 (단순 1일 → 3일, 추세 역전 조기 차단)
+        if not (df["MA20"].iloc[-1] > df["MA20"].iloc[-2] > df["MA20"].iloc[-3]):
             continue
 
         # 최근 20일 고점 대비 -5% 이상 눌린 경우만 허용 (고점 붙어있는 가짜 눌림목 제외)
@@ -147,14 +150,15 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             df["거래량"].iloc[-3] > df["거래량"].iloc[-2] > df["거래량"].iloc[-1]
         )
 
-        # ⑤ 수급 필터
+        # ⑤ 수급 필터 (합산 >= supply_min, WIN 평균 3.44 vs LOSS 2.94 기준)
+        supply_min = _cfg["scanner"]["day"]["supply_min"]
         flow = get_investor_flow(ticker)
         inst_days = 0
         foreign_days = 0
         if flow is not None:
             inst_days = flow["기관_순매수일"]
             foreign_days = flow["외국인_순매수일"]
-            if inst_days < 2 and foreign_days < 2:
+            if inst_days + foreign_days < supply_min:
                 continue
 
         # RSI 하드 필터: 과매수 구간 제외
@@ -252,13 +256,14 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
         if _count_down_days(df, window=5) < 3:
             continue
 
-        # ③ MA60 -3~+1% 이내 (MA60 살짝 아래까지 허용)
+        # ③ MA60 ±band% 이내 (MA60 살짝 아래까지 허용)
+        band_pct = _cfg["scanner"]["pullback_band"] * 100
         pullback_pct = (close - ma60) / ma60 * 100
-        if not (-3.0 <= pullback_pct <= 1.0):
+        if not (-band_pct <= pullback_pct <= 1.0):
             continue
 
-        # MA20 우상향 필터 (단기 지지선 역할 확인)
-        if df["MA20"].iloc[-1] <= df["MA20"].iloc[-2]:
+        # MA20 연속 3일 우상향 필터 (단기 지지선 + 추세 역전 조기 차단)
+        if not (df["MA20"].iloc[-1] > df["MA20"].iloc[-2] > df["MA20"].iloc[-3]):
             continue
 
         # ④ 거래량 감소 (눌림 5일 vs 직전 20일 비교 — 구간 분리)
@@ -272,14 +277,15 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
             df["거래량"].iloc[-3] > df["거래량"].iloc[-2] > df["거래량"].iloc[-1]
         )
 
-        # ⑤ 수급 필터
+        # ⑤ 수급 필터 (합산 >= supply_min)
+        supply_min = _cfg["scanner"]["swing"]["supply_min"]
         flow = get_investor_flow(ticker)
         inst_days = 0
         foreign_days = 0
         if flow is not None:
             inst_days = flow["기관_순매수일"]
             foreign_days = flow["외국인_순매수일"]
-            if inst_days < 2 and foreign_days < 2:
+            if inst_days + foreign_days < supply_min:
                 continue
 
         # RSI 구간 점수

@@ -7,7 +7,7 @@ market:
   swing_min_trade: 10_000_000_000   # 스윙 거래대금 하한 (100억)
 
 scanner:
-  pullback_band: 0.03               # MA 기준 눌림 허용 범위 ±3%
+  pullback_band: 0.021              # MA 기준 눌림 허용 범위 ±2.1% (3% → 2.1%, WIN 최고 구간 기준)
   vol_decay_ratio: 0.70             # 거래량 감소 임계값 (직전 평균 대비)
 
   day:
@@ -16,6 +16,7 @@ scanner:
     lookback_days: 150              # OHLCV 조회 기간 (MA60 확보)
     down_days_min: 2                # 눌림 인정 하락일 수
     pullback_window: 3              # 눌림 거래량 비교 구간 (일)
+    supply_min: 3                   # 수급 합산 최소일수 (기관+외국인 순매수일 합계)
 
   swing:
     tp_mult: 3.0
@@ -23,6 +24,7 @@ scanner:
     lookback_days: 250              # OHLCV 조회 기간 (MA120 확보)
     down_days_min: 3
     pullback_window: 5
+    supply_min: 3                   # 수급 합산 최소일수
 
 rsi:
   period: 14
@@ -32,10 +34,10 @@ rsi:
   score_mid_high: 40
 
 weights:
-  supply: 30        # 수급 (기관+외국인 순매수일)
+  supply: 43        # 수급 (기관+외국인 순매수일) — 30→43, 상관계수 0.247 최고
   risk_reward: 25   # 손익비
-  pullback: 15      # 눌림률
-  trend_quality: 20 # 추세 품질 (거래량 연속 감소)
+  pullback: 23      # 눌림률 — 15→23, WIN이 더 얕은 눌림 확인
+  trend_quality: 24 # 추세 품질 (거래량 연속 감소) — 20→24
   rsi_score: 10     # RSI 구간 점수
 
 backtest:
