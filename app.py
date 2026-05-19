@@ -616,7 +616,10 @@ with tab_verify:
 
                 if diag["weak_points"]:
                     msg = "  \n".join(f"• {p}" for p in diag["weak_points"])
-                    st.error(msg) if verdict == "재검토" else st.warning(msg)
+                    if verdict == "재검토":
+                        st.error(msg)
+                    else:
+                        st.warning(msg)
 
             st.divider()
             st.subheader("추천 히스토리")
