@@ -186,6 +186,35 @@ def calc_pullback_distribution(df_done: pd.DataFrame) -> dict[str, Any]:
         return {"table": pd.DataFrame(), "recommend_band": _PULLBACK_BAND_PCT, "current_band": _PULLBACK_BAND_PCT}
 
 
+def calc_feature_distribution(df: pd.DataFrame, feature_col: str, bins: int = 5) -> pd.DataFrame:
+    """
+    feature_col 값을 bins구간으로 나눠 구간별 WIN율 테이블 반환.
+    df는 feature_col과 is_win(0/1) 컬럼을 가지고 있어야 함 — 실매매 히스토리(prepare_done_df)뿐
+    아니라 backtest.py 트레이드 결과(익절=1, 손절/기간만료=0)에도 동일하게 적용 가능.
+    """
+    series = df[feature_col].dropna()
+    if len(series) < 10:
+        return pd.DataFrame()
+    try:
+        binned = pd.cut(series, bins=bins)
+        is_win = df.loc[series.index, "is_win"]
+
+        rows = []
+        for interval in binned.cat.categories:
+            mask = binned == interval
+            n = int(mask.sum())
+            wins = int(is_win[mask].sum())
+            rows.append({
+                "구간":     str(interval),
+                "거래수":   n,
+                "WIN수":    wins,
+                "WIN율(%)": round(wins / n * 100, 1) if n >= 3 else None,
+            })
+        return pd.DataFrame(rows)
+    except Exception:
+        return pd.DataFrame()
+
+
 def calc_rr_threshold(df_done: pd.DataFrame) -> dict[str, Any]:
     """risk_reward 3구간별 WIN율 → tp_mult/sl_mult 권고"""
     series = df_done["risk_reward"].dropna()

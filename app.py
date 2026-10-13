@@ -5,7 +5,7 @@ import streamlit as st
 
 from backtest import run_backtest
 from scanner import scan_day_trading, scan_swing
-from analysis import run_full_analysis
+from analysis import calc_feature_distribution, run_full_analysis
 from sheets import evaluate_strategy, is_configured, load_history, save_analysis_report, save_scan_results, update_results
 from utils import get_last_trading_date, get_market_direction, get_stock_news
 
@@ -471,6 +471,25 @@ with tab_backtest:
                         use_container_width=True,
                         hide_index=True,
                     )
+
+                feature_cols = [
+                    ("rsi", "RSI"),
+                    ("pullback_pct", "눌림률(%)"),
+                    ("vol_ratio", "거래량비율(3일/직전20일)"),
+                    ("drawdown_from_high", "20일 고점 대비 하락률(%)"),
+                    ("down_days", "최근 하락일수"),
+                ]
+                has_features = all(c in df_trades.columns for c, _ in feature_cols)
+                if has_features:
+                    with st.expander("진입 조건 구간별 WIN율 분석 (어떤 조건에서 더 잘 맞았는지)"):
+                        df_trades["is_win"] = (df_trades["result"] == "익절").astype(int)
+                        for col, label in feature_cols:
+                            n_unique = df_trades[col].nunique()
+                            table = calc_feature_distribution(df_trades, col, bins=min(5, n_unique) if n_unique > 1 else 1)
+                            if table.empty:
+                                continue
+                            st.caption(label)
+                            st.dataframe(table, use_container_width=True, hide_index=True)
 
 # 검증 탭
 with tab_verify:

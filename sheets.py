@@ -51,6 +51,15 @@ def _get_worksheet():
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=HIST_WS, rows=1000, cols=len(COLUMNS))
         ws.append_row(COLUMNS)
+        return ws
+
+    # 기존 워크시트는 COLUMNS에 새 컬럼이 추가돼도 헤더 행이 갱신되지 않으므로
+    # (예: strategy_ver 추가 후 기존 시트에는 반영 안 됨) 매번 대조해 누락분을 보강
+    header = ws.row_values(1)
+    missing = [c for c in COLUMNS if c not in header]
+    if missing:
+        start_cell = gspread.utils.rowcol_to_a1(1, len(header) + 1)
+        ws.update(start_cell, [missing])
     return ws
 
 

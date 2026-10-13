@@ -100,7 +100,8 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
         if not (close > ma60 and ma60 > df["MA60"].iloc[i - 1]):
             continue
         # ② 최근 3일 중 하락일 >= 2
-        if _count_down_days(df, i, window=3) < 2:
+        down_days = _count_down_days(df, i, window=3)
+        if down_days < 2:
             continue
 
         # ③ MA20 ±band% 이내
@@ -115,7 +116,8 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
 
         # 최근 20일 고점 대비 -5% 이상 눌린 경우만 허용
         recent_high = df["고가"].iloc[max(0, i - 19):i + 1].max()
-        if (close - recent_high) / recent_high * 100 > -5.0:
+        drawdown_from_high = (close - recent_high) / recent_high * 100
+        if drawdown_from_high > -5.0:
             continue
 
         # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
@@ -125,7 +127,8 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
             continue
 
         # RSI 하드 필터: 과매수 구간 제외
-        if df["RSI"].iloc[i] > 70:
+        rsi_val = df["RSI"].iloc[i]
+        if rsi_val > 70:
             continue
 
         atr = df["ATR"].iloc[i]
@@ -133,6 +136,11 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
             "idx": i,
             "tp_price": close + atr * DAY_TP_MULT,
             "sl_price": close - atr * DAY_SL_MULT,
+            "rsi": round(float(rsi_val), 1),
+            "pullback_pct": round(float(pullback_pct), 2),
+            "vol_ratio": round(float(vol_3d / vol_prev), 2),
+            "drawdown_from_high": round(float(drawdown_from_high), 2),
+            "down_days": down_days,
         })
     return signals
 
@@ -152,7 +160,8 @@ def _find_swing_signals(df: pd.DataFrame) -> list[dict]:
         if not (close > ma120 and ma120 > df["MA120"].iloc[i - 1]):
             continue
         # ② 최근 5일 중 하락일 >= 3
-        if _count_down_days(df, i, window=5) < 3:
+        down_days = _count_down_days(df, i, window=5)
+        if down_days < 3:
             continue
 
         # ③ MA60 ±band% 이내
@@ -171,11 +180,21 @@ def _find_swing_signals(df: pd.DataFrame) -> list[dict]:
         if vol_prev == 0 or vol_5d >= vol_prev * 0.7:
             continue
 
+        # scanner.py scan_swing에는 필터로 쓰이지 않지만, 구간별 WIN율 분석용으로 기록
+        rsi_val = df["RSI"].iloc[i]
+        recent_high = df["고가"].iloc[max(0, i - 19):i + 1].max()
+        drawdown_from_high = (close - recent_high) / recent_high * 100
+
         atr = df["ATR"].iloc[i]
         signals.append({
             "idx": i,
             "tp_price": close + atr * SWING_TP_MULT,
             "sl_price": close - atr * SWING_SL_MULT,
+            "rsi": round(float(rsi_val), 1),
+            "pullback_pct": round(float(pullback_pct), 2),
+            "vol_ratio": round(float(vol_5d / vol_prev), 2),
+            "drawdown_from_high": round(float(drawdown_from_high), 2),
+            "down_days": down_days,
         })
     return signals
 
@@ -261,6 +280,8 @@ def run_backtest(strategy: str = "day", months: int = 3, market: str = "KOSPI") 
             trade = _simulate_trade(df, sig["idx"], sig["tp_price"], sig["sl_price"], max_hold)
             if trade:
                 trade["ticker"] = ticker
+                for key in ("rsi", "pullback_pct", "vol_ratio", "drawdown_from_high", "down_days"):
+                    trade[key] = sig[key]
                 all_trades.append(trade)
 
     progress.empty()
