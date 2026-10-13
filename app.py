@@ -400,7 +400,9 @@ with tab_backtest:
     st.subheader("전략 백테스트")
     st.caption(
         f"시총 1000억↑ 종목 고정 샘플 {200}개 대상 (random_state=42, 재현 가능) / "
-        "신호 발생 다음날 시가(+슬리피지 0.1%) 매수 / 익절·손절·기간만료 시 청산 / 복리 MDD 기준"
+        "신호 발생 다음날 시가(+슬리피지 0.1%) 매수 / 익절·손절·기간만료 시 청산 / 복리 MDD 기준 / "
+        "스캔 탭(scanner.py)과 동일한 추세·눌림·거래량·RSI 필터 사용 (단, 기관/외국인 수급 필터는 "
+        "과거 데이터 미제공으로 제외 — 실제 라이브 전략 승률은 이 결과 이상일 가능성)"
     )
 
     col1, col2, col3 = st.columns(3)
@@ -415,9 +417,9 @@ with tab_backtest:
         bt_market = st.selectbox("시장", ["KOSPI", "KOSDAQ"], key="bt_market")
 
     if bt_strategy == "day":
-        st.info("익절 +5% / 손절 -2% / 최대 보유 5거래일")
+        st.info("익절/손절: 신호일 종가 ± ATR×2.0/1.0 (scanner.py와 동일, 종목마다 다름) / 최대 보유 5거래일")
     else:
-        st.info("익절 +7% / 손절 -3% / 최대 보유 10거래일")
+        st.info("익절/손절: 신호일 종가 ± ATR×3.0/1.5 (scanner.py와 동일, 종목마다 다름) / 최대 보유 10거래일")
 
     if st.button("🔬 백테스트 실행", key="btn_backtest"):
         with st.spinner(f"백테스트 중... ({bt_months}개월 / 랜덤 200종목)"):
