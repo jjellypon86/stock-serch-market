@@ -30,9 +30,9 @@ config.yaml   # 전략 파라미터 중앙 관리 — 시장 필터, 스코어 �
 ```
 app.py
   ├── scan_day_trading() / scan_swing()    ← scanner.py
-  │       └── get_stock_listing()          ← utils.py → Naver Finance 스크래핑
+  │       └── get_stock_listing()          ← utils.py → 네이버 증권 모바일 API
   │           get_ohlcv()                  ← utils.py → FinanceDataReader
-  │           get_investor_flow()          ← utils.py → Naver Finance 스크래핑
+  │           get_investor_flow()          ← utils.py → 네이버 증권 모바일 API
   │           add_moving_averages/atr/rsi()← utils.py
   ├── run_backtest()                        ← backtest.py
   │       └── (동일 utils.py 사용)
@@ -101,7 +101,8 @@ app.py
 ## 외부 의존성 & 시크릿
 
 **데이터 소스**
-- **Naver Finance** (`finance.naver.com`) — 종목 목록, 투자자 수급, 뉴스 (BeautifulSoup 스크래핑)
+- **네이버 증권 모바일 API** (`m.stock.naver.com/api/...`) — 종목 목록(`stocks/marketValue`), 투자자 수급·종목명(`stock/{code}/integration`), 뉴스(`news/stock/{code}`) — JSON 응답 직접 파싱
+  - 2026년 5월 이전까지 쓰던 `finance.naver.com` 구 페이지(HTML 스크래핑)는 네이버 금융 리뉴얼("Npay 증권")로 전면 폐지됨. 구 URL은 전부 `stock.naver.com` Next.js 페이지로 리다이렉트되며 서버 HTML에 데이터가 없음
 - **FinanceDataReader** — OHLCV 데이터
 - **Google Sheets API** — 매매 일지 저장/조회
 

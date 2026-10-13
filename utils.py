@@ -4,7 +4,6 @@ import FinanceDataReader as fdr
 import pandas as pd
 import requests
 import streamlit as st
-from bs4 import BeautifulSoup
 
 _NAVER_HEADERS = {
     "User-Agent": (
@@ -12,7 +11,7 @@ _NAVER_HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/120.0.0.0 Safari/537.36"
     ),
-    "Referer": "https://finance.naver.com",
+    "Referer": "https://m.stock.naver.com",
 }
 
 
@@ -44,62 +43,48 @@ def _parse_naver_number(text: str) -> int:
 @st.cache_data(ttl=3600)
 def get_stock_listing(market: str = "KOSPI") -> pd.DataFrame:
     """
-    네이버 금융 시가총액 순 페이지에서 종목 리스팅 (KRX API 불필요)
-    시총 300억 미만 종목 도달 시 스캔 중단
-    거래대금 = 현재가 × 거래량 (근사치)
+    네이버 증권(m.stock.naver.com) 시가총액 순 API에서 종목 리스팅
+    (finance.naver.com 구 페이지는 2026년 리뉴얼로 폐지되어 신규 모바일 API로 교체)
+    시총 300억 미만 종목 도달 시 스캔 중단, pageSize 상한은 100
     """
-    sosok = "0" if market == "KOSPI" else "1"
     stocks: list[dict] = []
     MIN_CAP = 30_000_000_000  # 300억
 
-    for page in range(1, 150):
+    for page in range(1, 50):
         url = (
-            f"https://finance.naver.com/sise/sise_market_sum.naver"
-            f"?sosok={sosok}&page={page}"
+            f"https://m.stock.naver.com/api/stocks/marketValue/{market}"
+            f"?page={page}&pageSize=100"
         )
         try:
             resp = requests.get(url, headers=_NAVER_HEADERS, timeout=10)
-            resp.encoding = "euc-kr"
-            soup = BeautifulSoup(resp.text, "lxml")
+            items = resp.json().get("stocks", [])
         except Exception:
             break
 
-        table = soup.find("table", class_="type_2")
-        if not table:
+        if not items:
             break
 
-        found = False
         stop = False
-        for row in table.find_all("tr"):
-            cols = row.find_all("td")
-            if len(cols) < 10:
+        for item in items:
+            try:
+                market_cap = int(item["marketValueRaw"])
+            except (KeyError, ValueError, TypeError):
                 continue
-            a_tag = cols[1].find("a")
-            if not a_tag or "code=" not in a_tag.get("href", ""):
-                continue
-
-            ticker = a_tag["href"].split("code=")[-1].strip()
-            name = a_tag.get_text(strip=True)
-            close = _parse_naver_number(cols[2].get_text())
-            market_cap = _parse_naver_number(cols[6].get_text()) * 100_000_000  # 억→원
-            volume = _parse_naver_number(cols[9].get_text())
-            trade_amount = close * volume  # 거래대금 근사치
 
             if market_cap < MIN_CAP:
                 stop = True
                 break
 
             stocks.append({
-                "ticker": ticker,
-                "name": name,
-                "종가": close,
-                "거래대금": trade_amount,
+                "ticker": item["itemCode"],
+                "name": item["stockName"],
+                "종가": int(item["closePriceRaw"]),
+                "거래대금": int(item["accumulatedTradingValueRaw"]),
                 "market_cap": market_cap,
-                "거래량": volume,
+                "거래량": int(item["accumulatedTradingVolumeRaw"]),
             })
-            found = True
 
-        if stop or not found:
+        if stop:
             break
 
     if not stocks:
@@ -135,108 +120,80 @@ def get_ohlcv(ticker: str, start: str, end: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=3600)
+def _get_integration(ticker: str) -> dict | None:
+    """네이버 증권(m.stock.naver.com) 종목 통합 정보 API — 종목명 + 일별 수급(dealTrendInfos) 포함"""
+    url = f"https://m.stock.naver.com/api/stock/{ticker}/integration"
+    try:
+        resp = requests.get(url, headers=_NAVER_HEADERS, timeout=5)
+        return resp.json()
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=86400)
 def get_ticker_name(ticker: str, market: str = "KOSPI") -> str:
-    """종목 코드 → 종목명 변환 (네이버 금융)"""
-    try:
-        url = f"https://finance.naver.com/item/main.naver?code={ticker}"
-        resp = requests.get(url, headers=_NAVER_HEADERS, timeout=5)
-        resp.encoding = "euc-kr"
-        soup = BeautifulSoup(resp.text, "lxml")
-        h1 = soup.find("div", class_="wrap_company")
-        if h1:
-            a = h1.find("a")
-            if a:
-                return a.get_text(strip=True)
-        return ticker
-    except Exception:
-        return ticker
+    """종목 코드 → 종목명 변환 (네이버 증권 통합 API)"""
+    data = _get_integration(ticker)
+    if data and data.get("stockName"):
+        return data["stockName"]
+    return ticker
 
 
 @st.cache_data(ttl=3600)
 def get_investor_flow(ticker: str) -> dict | None:
     """
-    네이버 금융 frgn.naver에서 기관/외국인 최근 3일 순매수 일수 스크래핑
-    페이지 구조: type2 테이블 두 번째, col[5]=기관순매매량, col[6]=외국인순매매량
+    네이버 증권 통합 API의 dealTrendInfos(최근 거래일별 수급)에서
+    최근 3일 기관/외국인 순매수 일수 집계
     반환: {"기관_순매수일": int, "외국인_순매수일": int}
     실패 시 None 반환 → 호출 측에서 수급 조건 스킵
     """
-    url = f"https://finance.naver.com/item/frgn.naver?code={ticker}"
-    try:
-        resp = requests.get(url, headers=_NAVER_HEADERS, timeout=5)
-        resp.encoding = "euc-kr"
-        soup = BeautifulSoup(resp.text, "lxml")
-
-        type2_tables = soup.find_all("table", class_="type2")
-        if len(type2_tables) < 2:
-            return None
-        table = type2_tables[1]  # 두 번째 type2 테이블이 수급 데이터
-
-        inst_days = 0
-        foreign_days = 0
-        count = 0
-
-        for row in table.find_all("tr"):
-            cols = row.find_all("td")
-            if len(cols) < 7:
-                continue
-            date_text = cols[0].get_text(strip=True)
-            if not date_text or "." not in date_text:
-                continue
-
-            inst_val = _parse_naver_number(cols[5].get_text())
-            foreign_val = _parse_naver_number(cols[6].get_text())
-
-            if inst_val > 0:
-                inst_days += 1
-            if foreign_val > 0:
-                foreign_days += 1
-
-            count += 1
-            if count >= 3:
-                break
-
-        if count == 0:
-            return None
-
-        return {"기관_순매수일": inst_days, "외국인_순매수일": foreign_days}
-    except Exception:
+    data = _get_integration(ticker)
+    if not data:
         return None
+
+    deal_trends = data.get("dealTrendInfos") or []
+    if not deal_trends:
+        return None
+
+    inst_days = 0
+    foreign_days = 0
+    for day in deal_trends[:3]:
+        inst_val = _parse_naver_number(day.get("organPureBuyQuant") or "0")
+        foreign_val = _parse_naver_number(day.get("foreignerPureBuyQuant") or "0")
+        if inst_val > 0:
+            inst_days += 1
+        if foreign_val > 0:
+            foreign_days += 1
+
+    return {"기관_순매수일": inst_days, "외국인_순매수일": foreign_days}
 
 
 @st.cache_data(ttl=1800)
 def get_stock_news(ticker: str, count: int = 3) -> list[dict]:
     """
-    네이버 금융 종목 뉴스 스크래핑
+    네이버 증권(m.stock.naver.com) 종목 뉴스 API
     반환: [{"title": str, "date": str, "url": str}, ...]
     실패 시 빈 리스트 반환
     """
-    url = f"https://finance.naver.com/item/news_news.naver?code={ticker}&page=1"
+    url = f"https://m.stock.naver.com/api/news/stock/{ticker}?pageSize={count}"
     try:
         resp = requests.get(url, headers=_NAVER_HEADERS, timeout=5)
-        resp.encoding = "euc-kr"
-        soup = BeautifulSoup(resp.text, "lxml")
-        table = soup.find("table", class_="type5")
-        if table is None:
-            return []
+        groups = resp.json()
+        items = groups[0].get("items", []) if groups else []
 
         results = []
-        for row in table.find_all("tr"):
-            title_td = row.find("td", class_="title")
-            date_td = row.find("td", class_="date")
-            if not title_td or not date_td:
-                continue
-            a_tag = title_td.find("a")
-            if not a_tag:
-                continue
-            title = a_tag.get_text(strip=True)
-            href = a_tag.get("href", "")
-            date = date_td.get_text(strip=True)
-            if href.startswith("/"):
-                href = "https://finance.naver.com" + href
-            results.append({"title": title, "date": date, "url": href})
-            if len(results) >= count:
-                break
+        for item in items[:count]:
+            raw_dt = item.get("datetime", "")
+            date = (
+                f"{raw_dt[:4]}-{raw_dt[4:6]}-{raw_dt[6:8]} {raw_dt[8:10]}:{raw_dt[10:12]}"
+                if len(raw_dt) >= 12 else raw_dt
+            )
+            results.append({
+                "title": item.get("title", ""),
+                "date": date,
+                "url": item.get("mobileNewsUrl", ""),
+            })
 
         return results
     except Exception:
