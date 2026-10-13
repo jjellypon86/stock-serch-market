@@ -2,22 +2,26 @@ from datetime import datetime, timedelta
 
 import pandas as pd
 import streamlit as st
+import yaml
 
-from utils import add_moving_averages, get_ohlcv, get_stock_listing
+from utils import add_atr, add_moving_averages, add_rsi, get_ohlcv, get_stock_listing
 
-DAY_TP_PCT = 0.05
-DAY_SL_PCT = 0.02
+with open("config.yaml") as _f:
+    _cfg = yaml.safe_load(_f)
+
+DAY_TP_MULT = _cfg["scanner"]["day"]["tp_mult"]
+DAY_SL_MULT = _cfg["scanner"]["day"]["sl_mult"]
 DAY_MAX_HOLD = 5
 
-SWING_TP_PCT = 0.07
-SWING_SL_PCT = 0.03
+SWING_TP_MULT = _cfg["scanner"]["swing"]["tp_mult"]
+SWING_SL_MULT = _cfg["scanner"]["swing"]["sl_mult"]
 SWING_MAX_HOLD = 10
 
 MIN_MARKET_CAP = 30_000_000_000
 BACKTEST_SAMPLE_SIZE = 200
 SLIPPAGE = 0.001  # 매수 슬리피지 0.1%
 
-PULLBACK_BAND = 0.03  # MA 기준 ±3%
+PULLBACK_BAND_PCT = _cfg["scanner"]["pullback_band"] * 100  # scanner.py와 동일 기준 (2.1%)
 
 
 def _get_date_range(end_date: str, days: int) -> str:
@@ -27,12 +31,12 @@ def _get_date_range(end_date: str, days: int) -> str:
 def _simulate_trade(
     df: pd.DataFrame,
     entry_idx: int,
-    tp_pct: float,
-    sl_pct: float,
+    tp_price: float,
+    sl_price: float,
     max_hold: int,
 ) -> dict | None:
-    """신호 발생 다음날 시가 매수 → 슬리피지 반영 → 익절/손절/기간만료 시뮬레이션"""
-    if entry_idx + 1 >= len(df):
+    """신호 발생 다음날 시가 매수(+슬리피지) → scanner.py와 동일한 목표가/손절가(신호일 종가 ± ATR×배수)로 청산 시뮬레이션"""
+    if entry_idx + 1 >= len(df) or sl_price <= 0 or sl_price >= tp_price:
         return None
 
     raw_price = df["시가"].iloc[entry_idx + 1]
@@ -40,8 +44,6 @@ def _simulate_trade(
         return None
 
     entry_price = raw_price * (1 + SLIPPAGE)  # 슬리피지 반영
-    tp_price = entry_price * (1 + tp_pct)
-    sl_price = entry_price * (1 - sl_pct)
     end_idx = min(entry_idx + 1 + max_hold, len(df))
 
     for i in range(entry_idx + 1, end_idx):
@@ -69,53 +71,112 @@ def _count_down_days(df: pd.DataFrame, end_i: int, window: int) -> int:
     return count
 
 
-def _find_day_signals(df: pd.DataFrame) -> list[int]:
-    """단기 눌림목 신호 인덱스 (MA20 기준)"""
-    df = add_moving_averages(df).dropna(subset=["MA20", "MA60"])
+def _prepare_day_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = add_moving_averages(df)
+    df = add_atr(df)
+    df = add_rsi(df)
+    return df.dropna(subset=["MA20", "MA60", "ATR", "RSI"]).reset_index(drop=True)
+
+
+def _prepare_swing_df(df: pd.DataFrame) -> pd.DataFrame:
+    df = add_moving_averages(df)
+    df = add_atr(df)
+    df = add_rsi(df)
+    return df.dropna(subset=["MA20", "MA60", "MA120", "ATR", "RSI"]).reset_index(drop=True)
+
+
+def _find_day_signals(df: pd.DataFrame) -> list[dict]:
+    """
+    단기 눌림목 신호 — scanner.py scan_day_trading()과 동일 조건.
+    df는 _prepare_day_df()로 지표 계산 + dropna + reset_index 완료된 상태여야 함.
+    기관/외국인 수급 필터는 과거 시점 데이터를 제공하는 소스가 없어 제외 (README 참고).
+    """
     signals = []
-    for i in range(4, len(df)):
+    for i in range(22, len(df)):
         close = df["종가"].iloc[i]
-        ma20 = df["MA20"].iloc[i]
         ma60 = df["MA60"].iloc[i]
 
-        if not (close > ma20 > ma60):
+        # ① 중기 상승 추세 (MA60 위 유지, MA20 단기 이탈 허용)
+        if not (close > ma60 and ma60 > df["MA60"].iloc[i - 1]):
             continue
+        # ② 최근 3일 중 하락일 >= 2
         if _count_down_days(df, i, window=3) < 2:
             continue
-        pullback_pct = abs((close - ma20) / ma20)
-        if pullback_pct > PULLBACK_BAND:
-            continue
-        vol_3d = df["거래량"].iloc[i - 2:i + 1].mean()
-        vol_20d = df["거래량"].iloc[max(0, i - 19):i + 1].mean()
-        if vol_20d == 0 or vol_3d >= vol_20d * 0.7:
+
+        # ③ MA20 ±band% 이내
+        ma20 = df["MA20"].iloc[i]
+        pullback_pct = (close - ma20) / ma20 * 100
+        if not (-PULLBACK_BAND_PCT <= pullback_pct <= 1.0):
             continue
 
-        signals.append(i)
+        # MA20 연속 3일 우상향
+        if not (df["MA20"].iloc[i] > df["MA20"].iloc[i - 1] > df["MA20"].iloc[i - 2]):
+            continue
+
+        # 최근 20일 고점 대비 -5% 이상 눌린 경우만 허용
+        recent_high = df["고가"].iloc[max(0, i - 19):i + 1].max()
+        if (close - recent_high) / recent_high * 100 > -5.0:
+            continue
+
+        # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
+        vol_3d = df["거래량"].iloc[i - 2:i + 1].mean()
+        vol_prev = df["거래량"].iloc[i - 22:i - 2].mean()
+        if vol_prev == 0 or vol_3d >= vol_prev * 0.7:
+            continue
+
+        # RSI 하드 필터: 과매수 구간 제외
+        if df["RSI"].iloc[i] > 70:
+            continue
+
+        atr = df["ATR"].iloc[i]
+        signals.append({
+            "idx": i,
+            "tp_price": close + atr * DAY_TP_MULT,
+            "sl_price": close - atr * DAY_SL_MULT,
+        })
     return signals
 
 
-def _find_swing_signals(df: pd.DataFrame) -> list[int]:
-    """스윙 눌림목 신호 인덱스 (MA60 기준)"""
-    df = add_moving_averages(df).dropna(subset=["MA60", "MA120"])
+def _find_swing_signals(df: pd.DataFrame) -> list[dict]:
+    """
+    스윙 눌림목 신호 — scanner.py scan_swing()과 동일 조건.
+    df는 _prepare_swing_df()로 지표 계산 + dropna + reset_index 완료된 상태여야 함.
+    기관/외국인 수급 필터는 과거 시점 데이터를 제공하는 소스가 없어 제외.
+    """
     signals = []
-    for i in range(6, len(df)):
+    for i in range(24, len(df)):
         close = df["종가"].iloc[i]
-        ma60 = df["MA60"].iloc[i]
         ma120 = df["MA120"].iloc[i]
 
-        if not (close > ma60 > ma120):
+        # ① 장기 상승 추세 (MA120 위 유지, MA60 단기 이탈 허용)
+        if not (close > ma120 and ma120 > df["MA120"].iloc[i - 1]):
             continue
+        # ② 최근 5일 중 하락일 >= 3
         if _count_down_days(df, i, window=5) < 3:
             continue
-        pullback_pct = abs((close - ma60) / ma60)
-        if pullback_pct > PULLBACK_BAND:
-            continue
-        vol_5d = df["거래량"].iloc[i - 4:i + 1].mean()
-        vol_20d = df["거래량"].iloc[max(0, i - 19):i + 1].mean()
-        if vol_20d == 0 or vol_5d >= vol_20d * 0.7:
+
+        # ③ MA60 ±band% 이내
+        ma60 = df["MA60"].iloc[i]
+        pullback_pct = (close - ma60) / ma60 * 100
+        if not (-PULLBACK_BAND_PCT <= pullback_pct <= 1.0):
             continue
 
-        signals.append(i)
+        # MA20 연속 3일 우상향 (단기 지지선 + 추세 역전 조기 차단)
+        if not (df["MA20"].iloc[i] > df["MA20"].iloc[i - 1] > df["MA20"].iloc[i - 2]):
+            continue
+
+        # ④ 거래량 감소 (눌림 5일 vs 직전 20일 비교 — 구간 분리)
+        vol_5d = df["거래량"].iloc[i - 4:i + 1].mean()
+        vol_prev = df["거래량"].iloc[i - 24:i - 4].mean()
+        if vol_prev == 0 or vol_5d >= vol_prev * 0.7:
+            continue
+
+        atr = df["ATR"].iloc[i]
+        signals.append({
+            "idx": i,
+            "tp_price": close + atr * SWING_TP_MULT,
+            "sl_price": close - atr * SWING_SL_MULT,
+        })
     return signals
 
 
@@ -153,17 +214,19 @@ def _aggregate_results(trades: list[dict]) -> dict:
 
 def run_backtest(strategy: str = "day", months: int = 3, market: str = "KOSPI") -> dict:
     """
-    전략 백테스트
+    전략 백테스트 — scanner.py 실시간 스캔(v2)과 동일한 필터·목표가 로직으로 신호 탐지
+    - 기관/외국인 수급 필터는 제외: 데이터 소스(네이버 증권 API)가 최근 수일치만 제공해
+      과거 시점 재현이 불가능함. 수급 필터는 WIN 기대값에 양의 가중치(43%)가 걸려 있어
+      실제 라이브 전략의 승률은 이 백테스트 결과 이상일 가능성이 높음
     - 생존 편향 제거: 시총 상위 N 대신 시총 300억↑ 전체에서 랜덤 샘플링
     - 슬리피지 0.1% 반영
+    - 목표가/손절가: scanner.py와 동일하게 신호일 종가 ± ATR × tp/sl_mult
     - MDD: 복리 누적 수익률 기반
     """
     end_date = datetime.now().strftime("%Y%m%d")
     # MA120 확보를 위해 150일 추가
     start_date = _get_date_range(end_date, days=months * 30 + 150)
 
-    tp_pct = DAY_TP_PCT if strategy == "day" else SWING_TP_PCT
-    sl_pct = DAY_SL_PCT if strategy == "day" else SWING_SL_PCT
     max_hold = DAY_MAX_HOLD if strategy == "day" else SWING_MAX_HOLD
     min_rows = 65 if strategy == "day" else 125
 
@@ -184,14 +247,18 @@ def run_backtest(strategy: str = "day", months: int = 3, market: str = "KOSPI") 
     for i, ticker in enumerate(tickers):
         progress.progress((i + 1) / len(tickers), text=f"백테스트: {ticker} ({i+1}/{len(tickers)})")
 
-        df_ohlcv = get_ohlcv(ticker, start_date, end_date)
-        if len(df_ohlcv) < min_rows:
+        df_raw = get_ohlcv(ticker, start_date, end_date)
+        if len(df_raw) < min_rows:
             continue
 
-        signals = _find_day_signals(df_ohlcv) if strategy == "day" else _find_swing_signals(df_ohlcv)
+        df = _prepare_day_df(df_raw) if strategy == "day" else _prepare_swing_df(df_raw)
+        if len(df) < 10:
+            continue
 
-        for sig_idx in signals:
-            trade = _simulate_trade(df_ohlcv, sig_idx, tp_pct, sl_pct, max_hold)
+        signals = _find_day_signals(df) if strategy == "day" else _find_swing_signals(df)
+
+        for sig in signals:
+            trade = _simulate_trade(df, sig["idx"], sig["tp_price"], sig["sl_price"], max_hold)
             if trade:
                 trade["ticker"] = ticker
                 all_trades.append(trade)
