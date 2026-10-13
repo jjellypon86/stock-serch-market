@@ -11,10 +11,14 @@ with open("config.yaml") as _f:
 
 DAY_TP_MULT = _cfg["scanner"]["day"]["tp_mult"]
 DAY_SL_MULT = _cfg["scanner"]["day"]["sl_mult"]
+DAY_MAX_LOSS_PCT = _cfg["scanner"]["day"]["max_loss_pct"]
+DAY_DRAWDOWN_MIN = _cfg["scanner"]["day"]["drawdown_min"]
+DAY_DRAWDOWN_MAX = _cfg["scanner"]["day"]["drawdown_max"]
 DAY_MAX_HOLD = 5
 
 SWING_TP_MULT = _cfg["scanner"]["swing"]["tp_mult"]
 SWING_SL_MULT = _cfg["scanner"]["swing"]["sl_mult"]
+SWING_MAX_LOSS_PCT = _cfg["scanner"]["swing"]["max_loss_pct"]
 SWING_MAX_HOLD = 10
 
 MIN_MARKET_CAP = 30_000_000_000
@@ -114,10 +118,10 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
         if not (df["MA20"].iloc[i] > df["MA20"].iloc[i - 1] > df["MA20"].iloc[i - 2]):
             continue
 
-        # 최근 20일 고점 대비 -5% 이상 눌린 경우만 허용
+        # 최근 20일 고점 대비 하락률 밴드 (scanner.py와 동일, v3)
         recent_high = df["고가"].iloc[max(0, i - 19):i + 1].max()
         drawdown_from_high = (close - recent_high) / recent_high * 100
-        if drawdown_from_high > -5.0:
+        if not (DAY_DRAWDOWN_MIN <= drawdown_from_high <= DAY_DRAWDOWN_MAX):
             continue
 
         # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
@@ -135,7 +139,7 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
         signals.append({
             "idx": i,
             "tp_price": close + atr * DAY_TP_MULT,
-            "sl_price": close - atr * DAY_SL_MULT,
+            "sl_price": max(close - atr * DAY_SL_MULT, close * (1 - DAY_MAX_LOSS_PCT)),
             "rsi": round(float(rsi_val), 1),
             "pullback_pct": round(float(pullback_pct), 2),
             "vol_ratio": round(float(vol_3d / vol_prev), 2),
@@ -189,7 +193,7 @@ def _find_swing_signals(df: pd.DataFrame) -> list[dict]:
         signals.append({
             "idx": i,
             "tp_price": close + atr * SWING_TP_MULT,
-            "sl_price": close - atr * SWING_SL_MULT,
+            "sl_price": max(close - atr * SWING_SL_MULT, close * (1 - SWING_MAX_LOSS_PCT)),
             "rsi": round(float(rsi_val), 1),
             "pullback_pct": round(float(pullback_pct), 2),
             "vol_ratio": round(float(vol_5d / vol_prev), 2),

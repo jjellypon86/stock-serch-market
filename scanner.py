@@ -52,9 +52,17 @@ def _get_date_range(end_date: str, days: int = 60) -> str:
     return (datetime.strptime(end_date, "%Y%m%d") - timedelta(days=days)).strftime("%Y%m%d")
 
 
-def _calc_exit_prices(close: float, atr: float, tp_mult: float, sl_mult: float) -> tuple[int, int, float]:
+def _calc_exit_prices(
+    close: float, atr: float, tp_mult: float, sl_mult: float, max_loss_pct: float = 1.0
+) -> tuple[int, int, float]:
+    """
+    익절/손절가 계산. 손절은 ATR 기반 폭과 종가 대비 퍼센트 상한(max_loss_pct) 중 더 타이트한 쪽 사용 —
+    변동성 큰 종목에서 ATR×sl_mult가 과도하게 넓어져 손절이 늦게 걸리는 것을 방지.
+    """
     tp = close + atr * tp_mult
-    sl = close - atr * sl_mult
+    sl_atr = close - atr * sl_mult
+    sl_cap = close * (1 - max_loss_pct)
+    sl = max(sl_atr, sl_cap)
     rr = round((tp - close) / (close - sl), 2) if close > sl else 0.0
     return int(tp), int(sl), rr
 
@@ -133,10 +141,14 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         if not (df["MA20"].iloc[-1] > df["MA20"].iloc[-2] > df["MA20"].iloc[-3]):
             continue
 
-        # 최근 20일 고점 대비 -5% 이상 눌린 경우만 허용 (고점 붙어있는 가짜 눌림목 제외)
+        # 최근 20일 고점 대비 하락률 밴드 (v3: 141건 백테스트 구간 분석 결과 반영)
+        # -5~-10.7%(얕은 눌림, 가장 많은 구간)는 WIN율 14.5%로 최저, -10.7~-22.1%는 31~33%로 최고,
+        # -22% 이상 급락은 추세붕괴로 0% — drawdown_min/max로 "진짜 눌림목" 구간만 선별
         recent_high = df["고가"].iloc[-20:].max()
         drawdown_from_high = (close - recent_high) / recent_high * 100
-        if drawdown_from_high > -5.0:
+        drawdown_min = _cfg["scanner"]["day"]["drawdown_min"]
+        drawdown_max = _cfg["scanner"]["day"]["drawdown_max"]
+        if not (drawdown_min <= drawdown_from_high <= drawdown_max):
             continue
 
         # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
@@ -175,7 +187,8 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             rsi_score = 0
 
         atr = df["ATR"].iloc[-1]
-        tp, sl, rr = _calc_exit_prices(close, atr, DAY_TP_MULT, DAY_SL_MULT)
+        max_loss_pct = _cfg["scanner"]["day"]["max_loss_pct"]
+        tp, sl, rr = _calc_exit_prices(close, atr, DAY_TP_MULT, DAY_SL_MULT, max_loss_pct)
         net_profit_pct = round(calc_net_profit(close, tp, 1) / close * 100, 2)
 
         results.append({
@@ -298,7 +311,8 @@ def scan_swing(end_date: str, market: str = "KOSPI") -> pd.DataFrame:
             rsi_score = 0
 
         atr = df["ATR"].iloc[-1]
-        tp, sl, rr = _calc_exit_prices(close, atr, SWING_TP_MULT, SWING_SL_MULT)
+        max_loss_pct = _cfg["scanner"]["swing"]["max_loss_pct"]
+        tp, sl, rr = _calc_exit_prices(close, atr, SWING_TP_MULT, SWING_SL_MULT, max_loss_pct)
 
         results.append({
             "ticker": ticker,
