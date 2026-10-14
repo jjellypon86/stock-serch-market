@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import FinanceDataReader as fdr
 import pandas as pd
@@ -16,8 +17,11 @@ _NAVER_HEADERS = {
 
 
 def get_last_trading_date() -> str:
-    """직전 거래일 반환 (장 마감 15:30 기준, YYYYMMDD 포맷)"""
-    now = datetime.now()
+    """직전 거래일 반환 (장 마감 15:30 KST 기준, YYYYMMDD 포맷)
+
+    GitHub Actions·Streamlit Cloud 서버는 UTC라 서버 로컬 시간을 쓰면 하루 밀린다.
+    """
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
     if now.hour < 15 or (now.hour == 15 and now.minute < 30):
         target = now - timedelta(days=1)
     else:
