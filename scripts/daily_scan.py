@@ -27,12 +27,15 @@ def main() -> None:
     date = get_last_trading_date()
     print(f"[daily_scan] 기준일: {date}")
 
+    failures: list[str] = []
+
     for market in MARKETS:
         print(f"[daily_scan] {market} 단기 스캔 시작...")
         try:
             df = scan_day_trading(date, market)
         except Exception as e:
             print(f"[daily_scan] {market} 스캔 실패: {e}")
+            failures.append(market)
             continue
 
         if df.empty:
@@ -44,13 +47,20 @@ def main() -> None:
             print(f"[daily_scan] {market}: {saved}건 저장, {skipped}건 중복 스킵")
         else:
             print(f"[daily_scan] {market} 저장 실패: {err}")
+            failures.append(market)
 
     print("[daily_scan] 결과 업데이트(WIN/LOSS/EXPIRED 자동 판정) 실행...")
     updated, err = update_results()
     if err:
         print(f"[daily_scan] 결과 업데이트 오류: {err}")
+        failures.append("update_results")
     else:
         print(f"[daily_scan] {updated}건 업데이트 완료")
+
+    # 실패를 Actions에서 "성공"으로 보이지 않게 비정상 종료
+    if failures:
+        print(f"[daily_scan] 실패 항목: {', '.join(failures)}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

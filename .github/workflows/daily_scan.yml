@@ -2,12 +2,21 @@ name: Daily Scan
 
 on:
   schedule:
-    - cron: '23 7 * * 1-5'  # 평일 UTC 07:23 = KST 16:23 (정규장 마감 15:30 이후, 정각 혼잡 회피)
+    # GitHub schedule은 지연·누락이 잦아 백업 cron을 여러 개 둠 (중복 저장은 save_scan_results가 스킵)
+    - cron: '23 7 * * 1-5'   # 평일 UTC 07:23 = KST 16:23 (정규장 마감 15:30 이후, 정각 혼잡 회피)
+    - cron: '47 9 * * 1-5'   # 백업 1: KST 18:47
+    - cron: '17 12 * * 1-5'  # 백업 2: KST 21:17
   workflow_dispatch: {}      # Actions 탭에서 수동 실행 버튼
+
+# 같은 스캔이 동시에 돌아 시트에 중복 저장되는 것을 방지
+concurrency:
+  group: daily-scan
+  cancel-in-progress: false
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04    # ubuntu-latest가 Ubuntu 26으로 전환되어 버전 고정
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
