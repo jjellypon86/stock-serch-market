@@ -98,6 +98,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         return pd.DataFrame()
 
     results: list[dict] = []
+    funnel: dict[str, int] = {}  # 단계별 탈락 수 (진단용 로그)
     progress = st.progress(0, text="단기 눌림목 스캔 중...")
     tickers = candidates.index.tolist()
     start = _get_date_range(date, days=150)  # MA60 확보
@@ -107,6 +108,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
 
         df = get_ohlcv(ticker, start, date)
         if len(df) < 65:
+            funnel["데이터부족"] = funnel.get("데이터부족", 0) + 1
             continue
 
         df = add_moving_averages(df)
@@ -115,6 +117,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         df = df.dropna(subset=["MA20", "MA60", "ATR", "RSI"])
 
         if len(df) < 5:
+            funnel["데이터부족"] = funnel.get("데이터부족", 0) + 1
             continue
 
         close = df["종가"].iloc[-1]
@@ -123,22 +126,26 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
 
         # ① 중기 상승 추세 (MA60 위 유지, MA20 단기 이탈 허용)
         if not (close > ma60 and ma60 > df["MA60"].iloc[-2]):
+            funnel["①MA60상승추세"] = funnel.get("①MA60상승추세", 0) + 1
             continue
 
         # ② 최근 3일 중 하락일 >= 2
         if len(df) < 4:
             continue
         if _count_down_days(df, window=3) < 2:
+            funnel["②하락일<2"] = funnel.get("②하락일<2", 0) + 1
             continue
 
         # ③ MA20 ±band% 이내 (MA20 살짝 아래까지 허용)
         band_pct = _cfg["scanner"]["pullback_band"] * 100
         pullback_pct = (close - ma20) / ma20 * 100
         if not (-band_pct <= pullback_pct <= 1.0):
+            funnel["③MA20근접"] = funnel.get("③MA20근접", 0) + 1
             continue
 
         # MA20 연속 3일 우상향 필터 (단순 1일 → 3일, 추세 역전 조기 차단)
         if not (df["MA20"].iloc[-1] > df["MA20"].iloc[-2] > df["MA20"].iloc[-3]):
+            funnel["MA20 3일우상향"] = funnel.get("MA20 3일우상향", 0) + 1
             continue
 
         # 최근 20일 고점 대비 하락률 밴드 (v3: 141건 백테스트 구간 분석 결과 반영)
@@ -149,6 +156,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         drawdown_min = _cfg["scanner"]["day"]["drawdown_min"]
         drawdown_max = _cfg["scanner"]["day"]["drawdown_max"]
         if not (drawdown_min <= drawdown_from_high <= drawdown_max):
+            funnel["고점대비하락밴드"] = funnel.get("고점대비하락밴드", 0) + 1
             continue
 
         # ④ 거래량 감소 (눌림 3일 vs 직전 20일 비교 — 구간 분리)
@@ -157,6 +165,7 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         vol_3d   = df["거래량"].iloc[-3:].mean()
         vol_prev = df["거래량"].iloc[-23:-3].mean()
         if vol_prev == 0 or vol_3d >= vol_prev * 0.7:
+            funnel["④거래량수축"] = funnel.get("④거래량수축", 0) + 1
             continue
         vol_consec_drop = bool(
             df["거래량"].iloc[-3] > df["거래량"].iloc[-2] > df["거래량"].iloc[-1]
@@ -171,11 +180,13 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
             inst_days = flow["기관_순매수일"]
             foreign_days = flow["외국인_순매수일"]
             if inst_days + foreign_days < supply_min:
+                funnel["⑤수급"] = funnel.get("⑤수급", 0) + 1
                 continue
 
         # RSI 하드 필터: 과매수 구간 제외
         rsi_val = df["RSI"].iloc[-1]
         if rsi_val > 70:
+            funnel["RSI>70"] = funnel.get("RSI>70", 0) + 1
             continue
 
         # RSI 구간 점수
@@ -209,6 +220,9 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
         })
 
     progress.empty()
+
+    # 탈락 단계별 집계 출력 (Actions 로그에서 0건 원인 파악용)
+    print(f"[scan_day] {market} 대상 {len(tickers)}종목, 통과 {len(results)}건, 탈락: {funnel}")
 
     if not results:
         return pd.DataFrame()
