@@ -561,18 +561,22 @@ with tab_backtest:
         "시장 대비 초과수익에서 비용 0.33%를 뺀 값으로 판단합니다. "
         "합격 = 비용후 초과 > 0 · 비용후 t값 ≥ 3(다중검정 보정) · 학습/검증 구간 모두 > 0. 수급 필터는 제외."
     )
-    v1c, v2c, v3c = st.columns(3)
+    v1c, v2c, v3c, v4c = st.columns(4)
     with v1c:
-        var_months = st.selectbox("기간", [12, 24], index=1, format_func=lambda x: f"{x}개월", key="var_months")
+        var_months = st.selectbox("기간", [12, 24, 36, 60], index=1, format_func=lambda x: f"{x}개월", key="var_months")
     with v2c:
-        var_sample = st.selectbox("종목 수", [200, 400, 600], index=1, key="var_sample")
+        var_exclude = st.selectbox(
+            "최근 제외", [0, 24], index=0, format_func=lambda x: "없음" if x == 0 else f"최근 {x}개월 제외", key="var_exclude"
+        )
     with v3c:
+        var_sample = st.selectbox("종목 수", [200, 300, 400, 600], index=2, key="var_sample")
+    with v4c:
         var_markets_label = st.selectbox("시장", ["KOSPI+KOSDAQ", "KOSPI", "KOSDAQ"], key="var_market")
 
     if st.button("🧪 변형 신호 검증 실행", key="btn_variant"):
         var_markets = ["KOSPI", "KOSDAQ"] if var_markets_label == "KOSPI+KOSDAQ" else [var_markets_label]
-        with st.spinner(f"변형 신호 검증 중... ({var_months}개월 / {var_sample}종목 / {var_markets_label})"):
-            variant = run_variant_study(var_months, var_markets, var_sample)
+        with st.spinner(f"변형 신호 검증 중... ({var_months}개월, 최근 {var_exclude}개월 제외 / {var_sample}종목 / {var_markets_label})"):
+            variant = run_variant_study(var_months, var_markets, var_sample, var_exclude)
 
         if not variant:
             st.warning("검증 결과가 없습니다. 데이터를 확인해 주세요.")

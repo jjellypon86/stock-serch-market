@@ -454,7 +454,12 @@ def _tstat(values: pd.Series) -> float:
     return float(v.mean() / (v.std(ddof=1) / np.sqrt(len(v))))
 
 
-def _build_edge_frame(df_raw: pd.DataFrame, ticker: str, window_start: pd.Timestamp) -> pd.DataFrame:
+def _build_edge_frame(
+    df_raw: pd.DataFrame,
+    ticker: str,
+    window_start: pd.Timestamp,
+    window_end: pd.Timestamp | None = None,
+) -> pd.DataFrame:
     """종목 하나의 일별 피처 + 미래 수익률 + 신호 여부 (벡터화). 진입은 다음날 시가 기준."""
     full = add_rsi(add_atr(add_moving_averages(df_raw)))
     close, open_, high, vol = full["종가"], full["시가"], full["고가"], full["거래량"]
@@ -491,6 +496,8 @@ def _build_edge_frame(df_raw: pd.DataFrame, ticker: str, window_start: pd.Timest
     feat["signal"] = feat.index.isin(list(signal_dates))
 
     feat = feat[feat.index >= window_start]
+    if window_end is not None:
+        feat = feat[feat.index < window_end]
     feat = feat.dropna(subset=[c for c, _ in EDGE_FEATURES] + ["fwd5", "fwd5_cc", "gap"])
     feat["ticker"] = ticker
     feat.index.name = "date"
@@ -659,14 +666,20 @@ def _collect_edge_frames(
     months: int,
     markets: list[str] | None,
     sample_size: int,
+    end_offset_months: int = 0,
 ) -> tuple[pd.DataFrame, pd.Timestamp] | None:
-    """종목별 피처/수익률 프레임을 모아 하나로 합침. (전체 프레임, 학습/검증 분할 시점) 반환"""
+    """
+    종목별 피처/수익률 프레임을 모아 하나로 합침. (전체 프레임, 학습/검증 분할 시점) 반환.
+    평가 구간 = [오늘-months개월, 오늘-end_offset_months개월). end_offset_months로 최근 구간을 제외하면
+    최근 데이터를 보고 만든 가설을 그 이전 기간(새 데이터)으로 확인할 수 있다.
+    """
     markets = markets or ["KOSPI", "KOSDAQ"]
     now = datetime.now()
     end_date = now.strftime("%Y%m%d")
     start_date = _get_date_range(end_date, days=months * 30 + 150)
     window_start = pd.Timestamp(now - timedelta(days=months * 30))
-    split_at = window_start + (pd.Timestamp(now) - window_start) * 2 / 3
+    window_end = pd.Timestamp(now - timedelta(days=end_offset_months * 30))
+    split_at = window_start + (window_end - window_start) * 2 / 3
 
     listings = [get_stock_listing(m) for m in markets]
     listings = [d for d in listings if not d.empty]
@@ -688,7 +701,7 @@ def _collect_edge_frames(
         df_raw = get_ohlcv(ticker, start_date, end_date)
         if len(df_raw) < 130:
             continue
-        frame = _build_edge_frame(df_raw, ticker, window_start)
+        frame = _build_edge_frame(df_raw, ticker, window_start, window_end)
         if not frame.empty:
             frames.append(frame)
     progress.empty()
@@ -702,6 +715,7 @@ def run_variant_study(
     months: int = 24,
     markets: list[str] | None = None,
     sample_size: int = 400,
+    end_offset_months: int = 0,
 ) -> dict[str, pd.DataFrame]:
     """
     변형 신호 7종 × 보유 5/10/20일 검증 (거래 가능 유니버스 한정, 시장 대비 초과수익).
@@ -709,7 +723,7 @@ def run_variant_study(
       V4 저변동·고점근접·추세, V5 V4+거래량 증가, V6 고점근접+저변동 복합 상위 10%
     - 시장 = 같은 날 거래 가능 유니버스 전체 평균. t값은 보유일 길이 블록 단위(겹침 보정), 비용 반영 후 기준.
     """
-    loaded = _collect_edge_frames(months, markets, sample_size)
+    loaded = _collect_edge_frames(months, markets, sample_size, end_offset_months)
     if loaded is None:
         return {}
     all_df, split_at = loaded
