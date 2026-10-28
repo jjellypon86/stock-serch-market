@@ -1,0 +1,51 @@
+name: Weekly Report
+
+on:
+  schedule:
+    - cron: '7 0 * * 6'   # 매주 토요일 UTC 00:07 = KST 09:07 (정각 혼잡 회피)
+  workflow_dispatch: {}    # Actions 탭에서 수동 실행 버튼
+
+permissions:
+  contents: read
+  issues: write            # 리포트를 Issue로 올려 사용자에게 알림이 가도록 함
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Write Streamlit secrets
+        env:
+          SECRETS_TOML: ${{ secrets.STREAMLIT_SECRETS_TOML }}
+        run: |
+          mkdir -p .streamlit
+          printf '%s' "$SECRETS_TOML" > .streamlit/secrets.toml
+
+      - name: Build report
+        run: python scripts/weekly_report.py report.md
+
+      - name: Open issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "📊 주간 리포트 $(TZ=Asia/Seoul date +%Y-%m-%d)" \
+            --body-file report.md
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "⚠️ 주간 리포트 생성 실패 $(TZ=Asia/Seoul date +%Y-%m-%d)" \
+            --body "@jjellypon86 주간 리포트 생성이 실패했습니다. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true

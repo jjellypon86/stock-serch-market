@@ -8,6 +8,10 @@ on:
     - cron: '17 12 * * 1-5'  # 백업 2: KST 21:17
   workflow_dispatch: {}      # Actions 탭에서 수동 실행 버튼
 
+permissions:
+  contents: read
+  issues: write            # 스캔 실패 시 Issue로 알림
+
 # 같은 스캔이 동시에 돌아 시트에 중복 저장되는 것을 방지
 concurrency:
   group: daily-scan
@@ -36,3 +40,12 @@ jobs:
 
       - name: Run daily scan
         run: python scripts/daily_scan.py
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --repo "${{ github.repository }}" \
+            --title "⚠️ 자동 스캔 실패 $(TZ=Asia/Seoul date +%Y-%m-%d)" \
+            --body "@jjellypon86 Daily Scan 실행이 실패했습니다. 로그: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" || true
