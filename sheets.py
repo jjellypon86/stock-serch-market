@@ -145,6 +145,10 @@ def _calc_result(
 
         entry_price = float(df["Open"].iloc[0]) * (1 + SLIPPAGE)
 
+        # 갭하락: 진입 시가가 이미 손절가 이하면 손절가에 체결될 수 없음 → 시가 청산(슬리피지만큼 손실)으로 처리
+        if entry_price <= stop_loss:
+            return entry_price, "LOSS", round(-SLIPPAGE * 100, 2), 0
+
         trading_days = 0
         for i, (_, row) in enumerate(df.iterrows()):
             if i == 0:

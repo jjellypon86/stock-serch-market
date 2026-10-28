@@ -53,13 +53,21 @@ def _get_date_range(end_date: str, days: int = 60) -> str:
 
 
 def _calc_exit_prices(
-    close: float, atr: float, tp_mult: float, sl_mult: float, max_loss_pct: float = 1.0
+    close: float,
+    atr: float,
+    tp_mult: float,
+    sl_mult: float,
+    max_loss_pct: float = 1.0,
+    max_profit_pct: float | None = None,
 ) -> tuple[int, int, float]:
     """
     익절/손절가 계산. 손절은 ATR 기반 폭과 종가 대비 퍼센트 상한(max_loss_pct) 중 더 타이트한 쪽 사용 —
     변동성 큰 종목에서 ATR×sl_mult가 과도하게 넓어져 손절이 늦게 걸리는 것을 방지.
+    익절도 max_profit_pct가 있으면 ATR 기반 폭과 퍼센트 상한 중 더 가까운 쪽 사용 (None이면 ATR 기반 그대로).
     """
     tp = close + atr * tp_mult
+    if max_profit_pct is not None:
+        tp = min(tp, close * (1 + max_profit_pct))
     sl_atr = close - atr * sl_mult
     sl_cap = close * (1 - max_loss_pct)
     sl = max(sl_atr, sl_cap)
@@ -199,7 +207,8 @@ def scan_day_trading(date: str, market: str = "KOSPI") -> pd.DataFrame:
 
         atr = df["ATR"].iloc[-1]
         max_loss_pct = _cfg["scanner"]["day"]["max_loss_pct"]
-        tp, sl, rr = _calc_exit_prices(close, atr, DAY_TP_MULT, DAY_SL_MULT, max_loss_pct)
+        max_profit_pct = _cfg["scanner"]["day"].get("max_profit_pct")
+        tp, sl, rr = _calc_exit_prices(close, atr, DAY_TP_MULT, DAY_SL_MULT, max_loss_pct, max_profit_pct)
         net_profit_pct = round(calc_net_profit(close, tp, 1) / close * 100, 2)
 
         results.append({

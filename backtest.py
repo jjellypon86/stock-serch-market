@@ -12,6 +12,7 @@ with open("config.yaml") as _f:
 DAY_TP_MULT = _cfg["scanner"]["day"]["tp_mult"]
 DAY_SL_MULT = _cfg["scanner"]["day"]["sl_mult"]
 DAY_MAX_LOSS_PCT = _cfg["scanner"]["day"]["max_loss_pct"]
+DAY_MAX_PROFIT_PCT = _cfg["scanner"]["day"].get("max_profit_pct")
 DAY_DRAWDOWN_MIN = _cfg["scanner"]["day"]["drawdown_min"]
 DAY_DRAWDOWN_MAX = _cfg["scanner"]["day"]["drawdown_max"]
 DAY_MAX_HOLD = 5
@@ -138,7 +139,11 @@ def _find_day_signals(df: pd.DataFrame) -> list[dict]:
         atr = df["ATR"].iloc[i]
         signals.append({
             "idx": i,
-            "tp_price": close + atr * DAY_TP_MULT,
+            "tp_price": (
+                min(close + atr * DAY_TP_MULT, close * (1 + DAY_MAX_PROFIT_PCT))
+                if DAY_MAX_PROFIT_PCT is not None
+                else close + atr * DAY_TP_MULT
+            ),
             "sl_price": max(close - atr * DAY_SL_MULT, close * (1 - DAY_MAX_LOSS_PCT)),
             "rsi": round(float(rsi_val), 1),
             "pullback_pct": round(float(pullback_pct), 2),
