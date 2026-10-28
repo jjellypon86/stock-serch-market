@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from backtest import run_backtest, run_backtest_grid
+from backtest import run_backtest, run_backtest_grid, run_edge_study
 from scanner import scan_day_trading, scan_swing
 from analysis import calc_feature_distribution, run_full_analysis
 from sheets import evaluate_strategy, is_configured, load_history, save_analysis_report, save_scan_results, update_results
@@ -520,6 +520,39 @@ with tab_backtest:
                 use_container_width=True,
                 hide_index=True,
             )
+
+    st.divider()
+    st.subheader("🔬 신호 우위 검증 (Edge study)")
+    st.caption(
+        "익절·손절을 빼고 '신호일에 사서 5일 보유'했을 때 시장 평균보다 나은지 먼저 봅니다. "
+        "시장 대비 초과 = 그날 전체 종목 평균을 뺀 수익률(약세장 영향 제거). "
+        "판단 기준(사전 고정): 신호일 초과수익이 비용(약 0.33%)을 넘고, t값 2 이상이며, 학습·검증 구간 모두 같은 방향일 것. "
+        "수급 필터는 제외된 결과입니다."
+    )
+    e1, e2, e3 = st.columns(3)
+    with e1:
+        edge_months = st.selectbox("기간", [12, 24], index=1, format_func=lambda x: f"{x}개월", key="edge_months")
+    with e2:
+        edge_sample = st.selectbox("종목 수", [200, 400, 600], index=1, key="edge_sample")
+    with e3:
+        edge_markets_label = st.selectbox("시장", ["KOSPI+KOSDAQ", "KOSPI", "KOSDAQ"], key="edge_market")
+
+    if st.button("🔬 신호 우위 검증 실행", key="btn_edge"):
+        edge_markets = ["KOSPI", "KOSDAQ"] if edge_markets_label == "KOSPI+KOSDAQ" else [edge_markets_label]
+        with st.spinner(f"신호 우위 검증 중... ({edge_months}개월 / {edge_sample}종목 / {edge_markets_label})"):
+            edge = run_edge_study(edge_months, edge_markets, edge_sample)
+
+        if not edge:
+            st.warning("검증 결과가 없습니다. 데이터를 확인해 주세요.")
+        else:
+            st.caption("표본 요약")
+            st.table(edge["meta"])
+            st.markdown("**① 신호일 vs 기준선 (5일 보유, 익절·손절 없음)**")
+            st.table(edge["headline"])
+            st.markdown("**② 피처별 예측력 (IC: 순위상관, 5일 후 시장대비 초과수익 기준)** — 평균 IC가 ±2% 이상, |t| 2 이상, 학습·검증 부호가 같으면 의미 있는 후보")
+            st.table(edge["ic"])
+            st.markdown("**③ 장세별 (시장 폭: MA60 위 종목 비율 3분위)**")
+            st.table(edge["regime"])
 
 # 검증 탭
 with tab_verify:

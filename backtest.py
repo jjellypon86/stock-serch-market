@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 import yaml
@@ -421,3 +422,218 @@ def run_backtest_grid(
         })
 
     return pd.DataFrame(rows)
+
+
+# ── 신호 우위(Edge) 검증 ─────────────────────────────────────────────────────
+# 익절/손절 튜닝 이전에 "이 신호가 애초에 시장 평균보다 나은가"를 먼저 확인한다.
+# 청산 규칙(익절·손절)을 빼고 순수 5일 보유 수익률로 평가하고, 날짜별 교차단면 평균을 빼서
+# 시장 방향(약세장 등)을 제거한 초과수익으로 비교한다.
+
+EDGE_FEATURES: list[tuple[str, str]] = [
+    ("pullback_pct", "MA20 대비 괴리(%)"),
+    ("ma60_gap", "MA60 대비 괴리(%)"),
+    ("ma60_slope", "MA60 1일 기울기(%)"),
+    ("ma20_slope", "MA20 3일 기울기(%)"),
+    ("drawdown20", "20일 고점 대비(%)"),
+    ("ret5_past", "직전 5일 수익률(%)"),
+    ("ret20_past", "직전 20일 수익률(%)"),
+    ("rsi", "RSI(14)"),
+    ("vol_ratio", "거래량비율(3일/직전20일)"),
+    ("atr_pct", "변동성 ATR/종가(%)"),
+    ("log_dollar_vol", "20일 평균 거래대금(log)"),
+]
+# 왕복 비용(%): 매수 슬리피지 + 수수료 양방향 + 증권거래세 (config.yaml fees 기준)
+EDGE_COST_PCT = (_cfg["fees"]["commission"] * 2 + _cfg["fees"]["tax"] + SLIPPAGE) * 100
+
+
+def _tstat(values: pd.Series) -> float:
+    """평균/표준오차. 표본(블록)이 10개 미만이면 NaN"""
+    v = values.dropna()
+    if len(v) < 10 or v.std(ddof=1) == 0:
+        return float("nan")
+    return float(v.mean() / (v.std(ddof=1) / np.sqrt(len(v))))
+
+
+def _build_edge_frame(df_raw: pd.DataFrame, ticker: str, window_start: pd.Timestamp) -> pd.DataFrame:
+    """종목 하나의 일별 피처 + 미래 수익률 + 신호 여부 (벡터화). 진입은 다음날 시가 기준."""
+    full = add_rsi(add_atr(add_moving_averages(df_raw)))
+    close, open_, high, vol = full["종가"], full["시가"], full["고가"], full["거래량"]
+
+    feat = pd.DataFrame(index=full.index)
+    feat["pullback_pct"] = (close / full["MA20"] - 1) * 100
+    feat["ma60_gap"] = (close / full["MA60"] - 1) * 100
+    feat["ma60_slope"] = (full["MA60"] / full["MA60"].shift(1) - 1) * 100
+    feat["ma20_slope"] = (full["MA20"] / full["MA20"].shift(3) - 1) * 100
+    feat["drawdown20"] = (close / high.rolling(20).max() - 1) * 100
+    feat["ret5_past"] = (close / close.shift(5) - 1) * 100
+    feat["ret20_past"] = (close / close.shift(20) - 1) * 100
+    feat["rsi"] = full["RSI"]
+    feat["vol_ratio"] = vol.rolling(3).mean() / vol.shift(3).rolling(20).mean()
+    feat["atr_pct"] = full["ATR"] / close * 100
+    feat["log_dollar_vol"] = np.log1p((close * vol).rolling(20).mean())
+
+    entry = open_.shift(-1)  # 신호 다음날 시가
+    feat["fwd3"] = (close.shift(-3) / entry - 1) * 100
+    feat["fwd5"] = (close.shift(-5) / entry - 1) * 100        # 시가 매수 → 5일째 종가 청산
+    feat["fwd5_cc"] = (close.shift(-5) / close - 1) * 100     # 신호일 종가 매수 → 5일째 종가 (갭 포함)
+    feat["gap"] = (entry / close - 1) * 100                   # 신호일 종가 → 다음날 시가 (오버나이트)
+    feat = feat.replace([np.inf, -np.inf], np.nan)
+
+    # 신호 여부: scanner.py와 동일한 필터(_find_day_signals)를 그대로 재사용
+    prepared, dates = _prepare_day_df_dated(df_raw)
+    signal_dates = {dates[s["idx"]] for s in _find_day_signals(prepared)} if len(prepared) >= 23 else set()
+    feat["signal"] = feat.index.isin(list(signal_dates))
+
+    feat = feat[feat.index >= window_start]
+    feat = feat.dropna(subset=[c for c, _ in EDGE_FEATURES] + ["fwd5", "fwd5_cc", "gap"])
+    feat["ticker"] = ticker
+    feat.index.name = "date"
+    return feat.reset_index()
+
+
+def run_edge_study(
+    months: int = 24,
+    markets: list[str] | None = None,
+    sample_size: int = 400,
+) -> dict[str, pd.DataFrame]:
+    """
+    단기 눌림목 신호의 우위 검증.
+    - headline: 신호일 vs 전체 종목-일(기준선) — 5일 보유 수익률, 비용 반영, 시장 대비 초과수익, t값
+    - ic: 피처별 5일 후 초과수익과의 순위상관(IC)·5분위 수익률 (익절/손절과 무관한 순수 예측력)
+    - regime: 시장 폭(MA60 위 종목 비율) 3분위별 기준선/신호 수익률
+    t값은 5일 수익률이 날마다 겹치는 문제를 줄이기 위해 5거래일 블록 단위로 계산.
+    """
+    markets = markets or ["KOSPI", "KOSDAQ"]
+    now = datetime.now()
+    end_date = now.strftime("%Y%m%d")
+    start_date = _get_date_range(end_date, days=months * 30 + 150)
+    window_start = pd.Timestamp(now - timedelta(days=months * 30))
+    split_at = window_start + (pd.Timestamp(now) - window_start) * 2 / 3
+
+    listings = [get_stock_listing(m) for m in markets]
+    listings = [d for d in listings if not d.empty]
+    if not listings:
+        st.warning("종목 데이터를 가져올 수 없습니다.")
+        return {}
+
+    universe = pd.concat(listings)
+    universe = universe[~universe.index.duplicated()]
+    universe = universe[universe["market_cap"] >= MIN_MARKET_CAP]
+    if len(universe) > sample_size:
+        universe = universe.sample(sample_size, random_state=42)
+    tickers = universe.index.tolist()
+
+    frames: list[pd.DataFrame] = []
+    progress = st.progress(0, text="신호 우위 검증 진행 중...")
+    for i, ticker in enumerate(tickers):
+        progress.progress((i + 1) / len(tickers), text=f"신호 우위 검증: {ticker} ({i+1}/{len(tickers)})")
+        df_raw = get_ohlcv(ticker, start_date, end_date)
+        if len(df_raw) < 130:
+            continue
+        frame = _build_edge_frame(df_raw, ticker, window_start)
+        if not frame.empty:
+            frames.append(frame)
+    progress.empty()
+
+    if not frames:
+        return {}
+
+    all_df = pd.concat(frames, ignore_index=True)
+    # 교차단면 평균이 불안정한 날(종목 수 부족) 제외
+    all_df = all_df[all_df.groupby("date")["ticker"].transform("count") >= 50].copy()
+    if all_df.empty:
+        return {}
+
+    # 시장 중립화: 날짜별 평균 수익률을 뺀 초과수익
+    all_df["fwd5_x"] = all_df["fwd5"] - all_df.groupby("date")["fwd5"].transform("mean")
+
+    # 5거래일 블록 (겹치는 수익률의 자기상관 보정용)
+    unique_dates = sorted(all_df["date"].unique())
+    block_map = {d: i // 5 for i, d in enumerate(unique_dates)}
+    all_df["block"] = all_df["date"].map(block_map)
+    is_train = all_df["date"] < split_at
+
+    # ① 헤드라인: 기준선 vs 신호일
+    head_rows: list[dict[str, float | str]] = []
+
+    def add_head(label: str, mask: pd.Series) -> None:
+        sub = all_df[mask]
+        if sub.empty:
+            return
+        by_block = sub.groupby("block")["fwd5_x"].mean()
+        head_rows.append({
+            "구분": label,
+            "표본": len(sub),
+            "5일 평균수익(%)": round(sub["fwd5"].mean(), 2),
+            "비용 반영(%)": round(sub["fwd5"].mean() - EDGE_COST_PCT, 2),
+            "시장 대비 초과(%)": round(sub["fwd5_x"].mean(), 2),
+            "초과 t값": round(_tstat(by_block), 2),
+            "종가→종가 5일(%)": round(sub["fwd5_cc"].mean(), 2),
+            "익일 갭(%)": round(sub["gap"].mean(), 2),
+            "5일 상승비율(%)": round((sub["fwd5"] > 0).mean() * 100, 1),
+        })
+
+    all_true = pd.Series(True, index=all_df.index)
+    sig = all_df["signal"]
+    add_head("전체 종목-일 (기준선)", all_true)
+    add_head("신호일 (v3/v4 필터)", sig)
+    add_head("신호일 · 학습구간", sig & is_train)
+    add_head("신호일 · 검증구간", sig & ~is_train)
+
+    # ② 피처별 IC + 5분위
+    by_date = all_df.groupby("date")
+    r_fwd = by_date["fwd5_x"].rank(pct=True)
+    block_of_date = all_df.drop_duplicates("date").set_index("date")["block"]
+    ic_rows: list[dict[str, float | str]] = []
+    for col, label in EDGE_FEATURES:
+        r_feat = by_date[col].rank(pct=True)
+        tmp = pd.DataFrame({"date": all_df["date"], "a": r_feat, "b": r_fwd})
+        ic_by_date = tmp.groupby("date")[["a", "b"]].apply(lambda x: x["a"].corr(x["b"]))
+        ic_block = ic_by_date.groupby(block_of_date.reindex(ic_by_date.index).values).mean()
+        bucket = np.ceil(r_feat * 5).clip(1, 5)
+        quint = all_df.groupby(bucket)["fwd5_x"].mean()
+        q1 = float(quint.get(1.0, np.nan))
+        q5 = float(quint.get(5.0, np.nan))
+        ic_rows.append({
+            "피처": label,
+            "평균 IC(%)": round(float(ic_by_date.mean()) * 100, 2),
+            "IC t값": round(_tstat(ic_block), 2),
+            "학습 IC(%)": round(float(ic_by_date[ic_by_date.index < split_at].mean()) * 100, 2),
+            "검증 IC(%)": round(float(ic_by_date[ic_by_date.index >= split_at].mean()) * 100, 2),
+            "Q1(하위20%) 초과(%)": round(q1, 2),
+            "Q5(상위20%) 초과(%)": round(q5, 2),
+            "Q5−Q1(%)": round(q5 - q1, 2),
+        })
+
+    # ③ 장세별: 시장 폭(MA60 위 종목 비율) 3분위
+    all_df["above60"] = all_df["ma60_gap"] > 0
+    breadth = all_df.groupby("date")["above60"].mean()
+    tercile = pd.qcut(breadth, 3, labels=False, duplicates="drop")
+    names = {0: "약세장(폭 하위1/3)", 1: "중립", 2: "강세장(폭 상위1/3)"}
+    all_df["regime"] = all_df["date"].map(tercile)
+    regime_rows: list[dict[str, float | str]] = []
+    for code in sorted(c for c in all_df["regime"].dropna().unique()):
+        sub = all_df[all_df["regime"] == code]
+        sig_sub = sub[sub["signal"]]
+        b_range = breadth[tercile == code]
+        regime_rows.append({
+            "장세": names.get(int(code), str(code)),
+            "MA60 위 종목비율(%)": f"{b_range.min() * 100:.0f}~{b_range.max() * 100:.0f}",
+            "기준선 5일수익(%)": round(sub["fwd5"].mean(), 2),
+            "신호 표본": len(sig_sub),
+            "신호 5일수익(%)": round(sig_sub["fwd5"].mean(), 2) if len(sig_sub) else float("nan"),
+            "신호 시장대비 초과(%)": round(sig_sub["fwd5_x"].mean(), 2) if len(sig_sub) else float("nan"),
+        })
+
+    meta = pd.DataFrame([{
+        "거래일 수": len(unique_dates),
+        "종목-일 표본": len(all_df),
+        "종목 수": all_df["ticker"].nunique(),
+        "비용(%)": round(EDGE_COST_PCT, 2),
+    }])
+    return {
+        "meta": meta,
+        "headline": pd.DataFrame(head_rows),
+        "ic": pd.DataFrame(ic_rows),
+        "regime": pd.DataFrame(regime_rows),
+    }
