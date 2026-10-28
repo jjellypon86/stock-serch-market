@@ -477,6 +477,12 @@ def _build_edge_frame(df_raw: pd.DataFrame, ticker: str, window_start: pd.Timest
     feat["fwd5"] = (close.shift(-5) / entry - 1) * 100        # 시가 매수 → 5일째 종가 청산
     feat["fwd5_cc"] = (close.shift(-5) / close - 1) * 100     # 신호일 종가 매수 → 5일째 종가 (갭 포함)
     feat["gap"] = (entry / close - 1) * 100                   # 신호일 종가 → 다음날 시가 (오버나이트)
+    feat["fwd10"] = (close.shift(-10) / entry - 1) * 100
+    feat["fwd20"] = (close.shift(-20) / entry - 1) * 100
+    # 신호 구성 조건 (변형 신호 검증용, scanner.py 필터와 동일 정의)
+    feat["down3"] = (close.diff() < 0).astype(float).rolling(3).sum()
+    feat["ma20_up3"] = (full["MA20"] > full["MA20"].shift(1)) & (full["MA20"].shift(1) > full["MA20"].shift(2))
+    feat["ma60_up"] = full["MA60"] > full["MA60"].shift(1)
     feat = feat.replace([np.inf, -np.inf], np.nan)
 
     # 신호 여부: scanner.py와 동일한 필터(_find_day_signals)를 그대로 재사용
@@ -637,3 +643,165 @@ def run_edge_study(
         "ic": pd.DataFrame(ic_rows),
         "regime": pd.DataFrame(regime_rows),
     }
+
+
+# ── 변형 신호 검증 (사전 등록) ────────────────────────────────────────────────
+# 검정 수를 사전에 고정(변형 7 × 보유 3 = 21)하고, 다중검정 보정으로 비용 후 t값 3 이상을 합격선으로 둔다.
+# 합격 조건: 비용 반영 후 시장 대비 초과수익 > 0, 비용 후 t값 ≥ 3, 학습·검증 구간 모두 > 0.
+
+VARIANT_HORIZONS: list[int] = [5, 10, 20]
+VARIANT_T_PASS = 3.0
+VARIANT_T_WATCH = 2.0
+VARIANT_MIN_DOLLAR_VOL = 5_000_000_000  # 20일 평균 거래대금 50억 미만은 체결 가능성이 낮아 제외
+
+
+def _collect_edge_frames(
+    months: int,
+    markets: list[str] | None,
+    sample_size: int,
+) -> tuple[pd.DataFrame, pd.Timestamp] | None:
+    """종목별 피처/수익률 프레임을 모아 하나로 합침. (전체 프레임, 학습/검증 분할 시점) 반환"""
+    markets = markets or ["KOSPI", "KOSDAQ"]
+    now = datetime.now()
+    end_date = now.strftime("%Y%m%d")
+    start_date = _get_date_range(end_date, days=months * 30 + 150)
+    window_start = pd.Timestamp(now - timedelta(days=months * 30))
+    split_at = window_start + (pd.Timestamp(now) - window_start) * 2 / 3
+
+    listings = [get_stock_listing(m) for m in markets]
+    listings = [d for d in listings if not d.empty]
+    if not listings:
+        st.warning("종목 데이터를 가져올 수 없습니다.")
+        return None
+
+    universe = pd.concat(listings)
+    universe = universe[~universe.index.duplicated()]
+    universe = universe[universe["market_cap"] >= MIN_MARKET_CAP]
+    if len(universe) > sample_size:
+        universe = universe.sample(sample_size, random_state=42)
+    tickers = universe.index.tolist()
+
+    frames: list[pd.DataFrame] = []
+    progress = st.progress(0, text="변형 신호 검증 진행 중...")
+    for i, ticker in enumerate(tickers):
+        progress.progress((i + 1) / len(tickers), text=f"변형 신호 검증: {ticker} ({i+1}/{len(tickers)})")
+        df_raw = get_ohlcv(ticker, start_date, end_date)
+        if len(df_raw) < 130:
+            continue
+        frame = _build_edge_frame(df_raw, ticker, window_start)
+        if not frame.empty:
+            frames.append(frame)
+    progress.empty()
+
+    if not frames:
+        return None
+    return pd.concat(frames, ignore_index=True), split_at
+
+
+def run_variant_study(
+    months: int = 24,
+    markets: list[str] | None = None,
+    sample_size: int = 400,
+) -> dict[str, pd.DataFrame]:
+    """
+    변형 신호 7종 × 보유 5/10/20일 검증 (거래 가능 유니버스 한정, 시장 대비 초과수익).
+    - V0 현재 신호, V1 깊은눌림 밴드 제거, V2 + 거래량수축 제거, V3 얕은 눌림(-8% 이내),
+      V4 저변동·고점근접·추세, V5 V4+거래량 증가, V6 고점근접+저변동 복합 상위 10%
+    - 시장 = 같은 날 거래 가능 유니버스 전체 평균. t값은 보유일 길이 블록 단위(겹침 보정), 비용 반영 후 기준.
+    """
+    loaded = _collect_edge_frames(months, markets, sample_size)
+    if loaded is None:
+        return {}
+    all_df, split_at = loaded
+
+    # 거래 가능 유니버스 + 교차단면 안정성(하루 30종목 이상)
+    all_df = all_df[all_df["log_dollar_vol"] >= np.log1p(VARIANT_MIN_DOLLAR_VOL)].copy()
+    all_df = all_df[all_df.groupby("date")["ticker"].transform("count") >= 30].copy()
+    if all_df.empty:
+        return {}
+
+    by_date = all_df.groupby("date")
+    atr_rank = by_date["atr_pct"].rank(pct=True)
+    dd_rank = by_date["drawdown20"].rank(pct=True)
+    all_df["_score"] = dd_rank + (1 - atr_rank)
+    score_rank = all_df.groupby("date")["_score"].rank(pct=True)
+
+    trend = (all_df["ma60_gap"] > 0) & all_df["ma60_up"]
+    pull = (
+        (all_df["down3"] >= 2)
+        & all_df["pullback_pct"].between(-PULLBACK_BAND_PCT, 1.0)
+        & all_df["ma20_up3"]
+    )
+    vol_contract = all_df["vol_ratio"] < 0.7
+    rsi_ok = all_df["rsi"] <= 70
+    near_high = all_df["drawdown20"] >= -5
+    low_vol = atr_rank <= 1 / 3
+
+    variants: dict[str, pd.Series] = {
+        "V0 현재 신호(v3/v4)": all_df["signal"],
+        "V1 깊은눌림 밴드 제거": trend & pull & vol_contract & rsi_ok,
+        "V2 V1+거래량수축 제거": trend & pull & rsi_ok,
+        "V3 얕은 눌림(고점대비 -8% 이내)": trend & pull & rsi_ok & (all_df["drawdown20"] >= -8),
+        "V4 저변동·고점근접·추세": trend & low_vol & near_high,
+        "V5 V4+거래량 증가": trend & low_vol & near_high & (all_df["vol_ratio"] > 1),
+        "V6 고점근접+저변동 상위10%": score_rank >= 0.9,
+    }
+
+    unique_dates = sorted(all_df["date"].unique())
+    rank_map = {d: i for i, d in enumerate(unique_dates)}
+    all_df["_rank"] = all_df["date"].map(rank_map)
+    is_train = all_df["date"] < split_at
+
+    for h in VARIANT_HORIZONS:
+        col = f"fwd{h}"
+        all_df[f"x{h}"] = all_df[col] - all_df.groupby("date")[col].transform("mean")
+
+    rows: list[dict[str, float | str]] = []
+    for name, mask in variants.items():
+        for h in VARIANT_HORIZONS:
+            valid = mask & all_df[f"fwd{h}"].notna()
+            sub = all_df[valid]
+            if len(sub) < 30:
+                continue
+            x = sub[f"x{h}"]
+            block_means = x.groupby(sub["_rank"] // h).mean()
+            net_x = float(x.mean()) - EDGE_COST_PCT
+            t_net = _tstat(block_means - EDGE_COST_PCT)
+            train_net = float(sub.loc[is_train[valid], f"x{h}"].mean()) - EDGE_COST_PCT
+            test_net = float(sub.loc[~is_train[valid], f"x{h}"].mean()) - EDGE_COST_PCT
+            halves_ok = train_net > 0 and test_net > 0
+            if net_x > 0 and t_net >= VARIANT_T_PASS and halves_ok:
+                verdict = "합격"
+            elif net_x > 0 and t_net >= VARIANT_T_WATCH and halves_ok:
+                verdict = "관찰(t 2~3)"
+            else:
+                verdict = "탈락"
+            rows.append({
+                "변형": name,
+                "보유(일)": h,
+                "표본": len(sub),
+                "일평균 신호": round(len(sub) / len(unique_dates), 2),
+                "평균수익(%)": round(float(sub[f"fwd{h}"].mean()), 2),
+                "비용후 초과(%)": round(net_x, 2),
+                "비용후 t값": round(t_net, 2),
+                "학습 비용후 초과(%)": round(train_net, 2),
+                "검증 비용후 초과(%)": round(test_net, 2),
+                "판정": verdict,
+            })
+
+    market_rows = [
+        {
+            "보유(일)": h,
+            "시장 평균수익(%)": round(float(all_df[f"fwd{h}"].mean()), 2),
+            "비용 후(%)": round(float(all_df[f"fwd{h}"].mean()) - EDGE_COST_PCT, 2),
+        }
+        for h in VARIANT_HORIZONS
+    ]
+    meta = pd.DataFrame([{
+        "거래일 수": len(unique_dates),
+        "거래가능 종목-일": len(all_df),
+        "종목 수": all_df["ticker"].nunique(),
+        "검정 수": len(variants) * len(VARIANT_HORIZONS),
+        "합격선 t": VARIANT_T_PASS,
+    }])
+    return {"meta": meta, "market": pd.DataFrame(market_rows), "variants": pd.DataFrame(rows)}
