@@ -61,6 +61,7 @@ backtest:
   min_market_cap: 30_000_000_000
   sample_size: 200
   slippage: 0.001                  # 매수 슬리피지 0.1%
+  ignore_profit_cap: true          # (임시) true면 백테스트에서 익절 상한 무시 — v3/v4 동일 기간 비교용, 비교 후 false로 복구
 
 fees:
   commission: 0.00015              # 수수료 0.015%

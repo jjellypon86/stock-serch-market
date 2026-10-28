@@ -12,7 +12,12 @@ with open("config.yaml") as _f:
 DAY_TP_MULT = _cfg["scanner"]["day"]["tp_mult"]
 DAY_SL_MULT = _cfg["scanner"]["day"]["sl_mult"]
 DAY_MAX_LOSS_PCT = _cfg["scanner"]["day"]["max_loss_pct"]
-DAY_MAX_PROFIT_PCT = _cfg["scanner"]["day"].get("max_profit_pct")
+# backtest.ignore_profit_cap이 true면 익절 상한을 무시(v3 규칙으로 백테스트) — 실매매 스캔에는 영향 없음
+DAY_MAX_PROFIT_PCT = (
+    None
+    if _cfg["backtest"].get("ignore_profit_cap", False)
+    else _cfg["scanner"]["day"].get("max_profit_pct")
+)
 DAY_DRAWDOWN_MIN = _cfg["scanner"]["day"]["drawdown_min"]
 DAY_DRAWDOWN_MAX = _cfg["scanner"]["day"]["drawdown_max"]
 DAY_MAX_HOLD = 5
