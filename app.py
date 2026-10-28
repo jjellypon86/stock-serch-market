@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from backtest import run_backtest, run_backtest_grid, run_edge_study, run_variant_study
+from paper import load_paper_history, summarize_paper, update_paper_results
 from scanner import scan_day_trading, scan_swing
 from analysis import calc_feature_distribution, run_full_analysis
 from sheets import evaluate_strategy, is_configured, load_history, save_analysis_report, save_scan_results, update_results
@@ -65,9 +66,9 @@ if "debug_coin_day" not in st.session_state:
 if "debug_coin_swing" not in st.session_state:
     st.session_state.debug_coin_swing: dict[str, int] = {}
 
-tab_day, tab_swing, tab_backtest, tab_verify, tab_coin_day, tab_coin_swing, tab_coin_verify = st.tabs([
+tab_day, tab_swing, tab_backtest, tab_verify, tab_coin_day, tab_coin_swing, tab_coin_verify, tab_paper = st.tabs([
     "📊 단기 (당일 매매)", "📅 스윙 (1주일)", "🔬 백테스트", "📈 검증",
-    "🪙 코인 단기", "🪙 코인 스윙", "🪙 코인 검증",
+    "🪙 코인 단기", "🪙 코인 스윙", "🪙 코인 검증", "📡 모의추적",
 ])
 
 
@@ -1090,3 +1091,57 @@ st.markdown("""
 **[ 시나리오: 전략을 바꿔야 할 때 ]**
 > 자가 진단 54점. 신규 진입을 멈추고 백테스트로 파라미터를 바꿔라. 점수가 80점을 회복하기 전까지 실전은 없다. 규율 없는 자에게 시장은 자비를 베풀지 않는다.
 """)
+
+
+# 모의추적 탭 (저변동·고점근접·추세, 20거래일 보유 — 실제 매매 없음)
+with tab_paper:
+    st.subheader("📡 모의 추적: 저변동·고점근접·추세 (20거래일)")
+    st.caption(
+        "백테스트에서 방향은 일관됐지만 통계적으로 입증되지 않은 후보를 앞으로의 데이터로 검증합니다. 실제 매매는 하지 않습니다. "
+        "매일 자동 스캔이 후보를 기록하고, 20거래일 뒤 '다음날 시가 매수 → 20거래일째 종가 청산' 수익률을 "
+        "같은 기간 시장지수(KOSPI/KOSDAQ) 수익률과 비교해 비용(0.33%) 반영 초과수익으로 판정합니다."
+    )
+
+    if not is_configured():
+        st.warning("Google Sheets가 연동되지 않았습니다. Streamlit Cloud Secrets에 `gcp_service_account`를 설정해 주세요.")
+    else:
+        if st.button("🔄 모의추적 결과 업데이트", key="btn_paper_update"):
+            with st.spinner("20거래일이 지난 후보 판정 중..."):
+                n_judged, paper_err = update_paper_results()
+            if paper_err:
+                st.error(f"업데이트 오류: {paper_err}")
+            else:
+                load_paper_history.clear()
+                st.success(f"{n_judged}건 판정 완료")
+
+        df_paper = load_paper_history()
+        if df_paper.empty:
+            st.info("아직 기록된 후보가 없습니다. 다음 자동 스캔부터 쌓입니다.")
+        else:
+            paper_stats = summarize_paper(df_paper)
+            c1, c2, c3 = st.columns(3)
+            c1.metric("총 추적", int(paper_stats["총 추적"]))
+            c2.metric("판정 완료", int(paper_stats["판정 완료"]))
+            c3.metric("대기 중", int(paper_stats["대기"]))
+
+            if paper_stats["판정 완료"] > 0:
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("평균 수익률", f"{paper_stats['평균 수익률(%)']}%")
+                m2.metric("평균 시장지수", f"{paper_stats['평균 시장지수(%)']}%")
+                m3.metric("비용후 초과", f"{paper_stats['평균 비용후 초과(%)']}%")
+                m4.metric("초과 플러스 비율", f"{paper_stats['초과 플러스 비율(%)']}%")
+                t_val = paper_stats["t값(28일 블록)"]
+                st.caption(
+                    "t값(28일 블록): " + ("계산 가능한 블록이 5개 미만이라 아직 표시되지 않습니다." if pd.isna(t_val) else f"{t_val}")
+                    + "  ·  판단 기준: 비용후 초과 > 0 이고 t값 ≥ 2 (표본 30건 이상, 최소 6개월 관찰 권장)"
+                )
+            else:
+                st.info("첫 판정은 가장 오래된 후보의 20거래일이 지난 뒤(약 한 달 후)부터 가능합니다.")
+
+            show_cols = ["scan_date", "ticker", "name", "market", "close", "atr_pct", "drawdown20",
+                         "entry_date", "exit_date", "ret_pct", "bench_ret_pct", "net_excess_pct", "result"]
+            st.dataframe(
+                df_paper[[c for c in show_cols if c in df_paper.columns]].iloc[::-1],
+                use_container_width=True,
+                hide_index=True,
+            )

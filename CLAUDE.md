@@ -22,6 +22,7 @@ scanner.py    # 종목 스캔 핵심 로직 — MA20/MA60 눌림목 필터링, �
 utils.py      # 데이터 레이어 — OHLCV 조회, Naver 스크래핑, 이동평균·ATR·RSI 계산
 backtest.py   # 백테스트 엔진 — 랜덤 200종목 샘플, 슬리피지 반영 시뮬레이션, MDD 산출
 sheets.py     # Google Sheets 연동 — 스캔 결과 저장, WIN/LOSS/EXPIRED 자동 판정, 전략 평가
+paper.py      # 모의 추적(포워드 테스트) — 저변동·고점근접·추세 후보를 paper_lowvol 시트에 기록, 20거래일 뒤 시장지수 대비 초과수익으로 판정
 config.yaml   # 전략 파라미터 중앙 관리 — 시장 필터, 스코어 가중치, 백테스트 설정
 ```
 

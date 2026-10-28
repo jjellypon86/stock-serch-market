@@ -12,6 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from paper import save_paper_signals, scan_lowvol_trend, update_paper_results
 from scanner import scan_day_trading
 from sheets import is_configured, save_scan_results, update_results
 from utils import get_last_trading_date
@@ -56,6 +57,33 @@ def main() -> None:
         failures.append("update_results")
     else:
         print(f"[daily_scan] {updated}건 업데이트 완료")
+
+    # 모의 추적(V4: 저변동·고점근접·추세) — 기존 스캔 결과와 별도 시트(paper_lowvol)에 기록
+    print("[paper] 모의 추적 후보 스캔 시작...")
+    try:
+        paper_df = scan_lowvol_trend(date, MARKETS)
+        if paper_df.empty:
+            print("[paper] 후보 없음")
+        else:
+            print(
+                f"[paper] 후보 {len(paper_df)}건 (유니버스 {int(paper_df['universe_n'].iloc[0])}종목, "
+                f"ATR% 컷 {float(paper_df['atr_cut'].iloc[0])})"
+            )
+            ok, err, saved, skipped = save_paper_signals(paper_df, date)
+            if ok:
+                print(f"[paper] {saved}건 저장, {skipped}건 중복 스킵")
+            else:
+                print(f"[paper] 저장 실패: {err}")
+                failures.append("paper_save")
+        judged, err = update_paper_results()
+        if err:
+            print(f"[paper] 판정 오류: {err}")
+            failures.append("paper_update")
+        else:
+            print(f"[paper] {judged}건 판정 완료")
+    except Exception as e:
+        print(f"[paper] 모의 추적 실패: {e}")
+        failures.append("paper")
 
     # 실패를 Actions에서 "성공"으로 보이지 않게 비정상 종료
     if failures:
