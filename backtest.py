@@ -300,3 +300,124 @@ def run_backtest(strategy: str = "day", months: int = 3, market: str = "KOSPI") 
 
     progress.empty()
     return _aggregate_results(all_trades)
+
+
+GRID_TP_CAPS: list[float | None] = [None, 0.05, 0.06, 0.08, 0.10, 0.12]
+GRID_SL_CAPS: list[float] = [0.03, 0.04, 0.05, 0.07]
+
+
+def _prepare_day_df_dated(df_raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DatetimeIndex]:
+    """_prepare_day_df와 동일하되, 구간 분할용으로 신호 인덱스에 대응하는 날짜를 함께 반환"""
+    df = add_moving_averages(df_raw)
+    df = add_atr(df)
+    df = add_rsi(df)
+    df = df.dropna(subset=["MA20", "MA60", "ATR", "RSI"])
+    dates = pd.DatetimeIndex(df.index)
+    return df.reset_index(drop=True), dates
+
+
+def _summarize_trades(trades: list[dict]) -> dict[str, float]:
+    """거래 목록 → 거래수/승률/평균 수익률(=기대값). 익절만 승리로 계산 (run_backtest와 동일 기준)"""
+    if not trades:
+        return {"거래수": 0, "승률(%)": 0.0, "기대값(%)": 0.0}
+    profits = [t["profit_pct"] for t in trades]
+    wins = sum(1 for t in trades if t["result"] == "익절")
+    return {
+        "거래수": len(trades),
+        "승률(%)": round(wins / len(trades) * 100, 1),
+        "기대값(%)": round(sum(profits) / len(profits), 2),
+    }
+
+
+def run_backtest_grid(
+    months: int = 24,
+    markets: list[str] | None = None,
+    sample_size: int = 400,
+    tp_caps: list[float | None] | None = None,
+    sl_caps: list[float] | None = None,
+) -> pd.DataFrame:
+    """
+    단기 전략 익절/손절 퍼센트 상한 조합 그리드 검증 (표본 확대 + 기간 분할).
+    - 신호는 종목당 한 번만 탐지하고, 조합마다 익절가/손절가만 바꿔 시뮬레이션 (필터는 scanner.py와 동일)
+    - 평가 구간(최근 months개월)을 앞 2/3(학습)과 뒤 1/3(검증)으로 나눠 따로 집계 —
+      학습 구간 성적이 좋아도 검증 구간에서 무너지면 과거에 끼워 맞춘 값으로 판단
+    - 수급 필터 제외, 슬리피지 0.1%, 동시 도달 시 손절 우선 (run_backtest와 동일)
+    """
+    markets = markets or ["KOSPI", "KOSDAQ"]
+    tp_caps = GRID_TP_CAPS if tp_caps is None else tp_caps
+    sl_caps = GRID_SL_CAPS if sl_caps is None else sl_caps
+
+    now = datetime.now()
+    end_date = now.strftime("%Y%m%d")
+    start_date = _get_date_range(end_date, days=months * 30 + 150)
+    window_start = pd.Timestamp(now - timedelta(days=months * 30))
+    split_at = window_start + (pd.Timestamp(now) - window_start) * 2 / 3
+
+    listings = [get_stock_listing(m) for m in markets]
+    listings = [d for d in listings if not d.empty]
+    if not listings:
+        st.warning("종목 데이터를 가져올 수 없습니다.")
+        return pd.DataFrame()
+
+    universe = pd.concat(listings)
+    universe = universe[~universe.index.duplicated()]
+    universe = universe[universe["market_cap"] >= MIN_MARKET_CAP]
+    if len(universe) > sample_size:
+        universe = universe.sample(sample_size, random_state=42)
+    tickers = universe.index.tolist()
+
+    combos = [(tp, sl) for tp in tp_caps for sl in sl_caps]
+    collected: dict[tuple[float | None, float], list[tuple[pd.Timestamp, dict]]] = {c: [] for c in combos}
+    progress = st.progress(0, text="그리드 백테스트 진행 중...")
+
+    for i, ticker in enumerate(tickers):
+        progress.progress((i + 1) / len(tickers), text=f"그리드 백테스트: {ticker} ({i+1}/{len(tickers)})")
+
+        df_raw = get_ohlcv(ticker, start_date, end_date)
+        if len(df_raw) < 65:
+            continue
+
+        df, dates = _prepare_day_df_dated(df_raw)
+        if len(df) < 10:
+            continue
+
+        for sig in _find_day_signals(df):
+            idx = sig["idx"]
+            sig_date = dates[idx]
+            if sig_date < window_start:
+                continue
+
+            close = float(df["종가"].iloc[idx])
+            atr = float(df["ATR"].iloc[idx])
+            for tp_cap, sl_cap in combos:
+                tp_price = close + atr * DAY_TP_MULT
+                if tp_cap is not None:
+                    tp_price = min(tp_price, close * (1 + tp_cap))
+                sl_price = max(close - atr * DAY_SL_MULT, close * (1 - sl_cap))
+                trade = _simulate_trade(df, idx, tp_price, sl_price, DAY_MAX_HOLD)
+                if trade:
+                    collected[(tp_cap, sl_cap)].append((sig_date, trade))
+
+    progress.empty()
+
+    rows: list[dict[str, float | str]] = []
+    for (tp_cap, sl_cap), items in collected.items():
+        all_trades = [t for _, t in items]
+        train = [t for d, t in items if d < split_at]
+        test = [t for d, t in items if d >= split_at]
+        s_all, s_train, s_test = _summarize_trades(all_trades), _summarize_trades(train), _summarize_trades(test)
+        rows.append({
+            "익절 상한": "없음(ATR×2)" if tp_cap is None else f"{tp_cap * 100:.0f}%",
+            "손절 상한": f"{sl_cap * 100:.0f}%",
+            "전체 거래": s_all["거래수"],
+            "전체 승률(%)": s_all["승률(%)"],
+            "전체 기대값(%)": s_all["기대값(%)"],
+            "학습 거래": s_train["거래수"],
+            "학습 승률(%)": s_train["승률(%)"],
+            "학습 기대값(%)": s_train["기대값(%)"],
+            "검증 거래": s_test["거래수"],
+            "검증 승률(%)": s_test["승률(%)"],
+            "검증 기대값(%)": s_test["기대값(%)"],
+        })
+
+    return pd.DataFrame(rows)

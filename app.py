@@ -3,7 +3,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from backtest import run_backtest
+from backtest import run_backtest, run_backtest_grid
 from scanner import scan_day_trading, scan_swing
 from analysis import calc_feature_distribution, run_full_analysis
 from sheets import evaluate_strategy, is_configured, load_history, save_analysis_report, save_scan_results, update_results
@@ -490,6 +490,36 @@ with tab_backtest:
                                 continue
                             st.caption(label)
                             st.dataframe(table, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("🧪 익절/손절 상한 그리드 검증 (단기)")
+    st.caption(
+        "신호는 한 번만 찾고 익절·손절 퍼센트 상한 조합만 바꿔 비교합니다. "
+        "평가 기간을 앞 2/3(학습)·뒤 1/3(검증)로 나눠, 학습에서만 좋고 검증에서 무너지는 조합은 걸러서 보세요. "
+        "수급 필터는 제외된 결과입니다."
+    )
+    g1, g2, g3 = st.columns(3)
+    with g1:
+        grid_months = st.selectbox("기간", [12, 24], index=1, format_func=lambda x: f"{x}개월", key="grid_months")
+    with g2:
+        grid_sample = st.selectbox("종목 수", [200, 400, 600], index=1, key="grid_sample")
+    with g3:
+        grid_markets_label = st.selectbox("시장", ["KOSPI+KOSDAQ", "KOSPI", "KOSDAQ"], key="grid_market")
+
+    if st.button("🧪 그리드 검증 실행", key="btn_grid"):
+        grid_markets = ["KOSPI", "KOSDAQ"] if grid_markets_label == "KOSPI+KOSDAQ" else [grid_markets_label]
+        with st.spinner(f"그리드 검증 중... ({grid_months}개월 / {grid_sample}종목 / {grid_markets_label}) — 수 분 걸릴 수 있습니다"):
+            df_grid = run_backtest_grid(grid_months, grid_markets, grid_sample)
+
+        if df_grid.empty:
+            st.warning("그리드 검증 결과가 없습니다. 데이터를 확인해 주세요.")
+        else:
+            st.caption("현재 v4 = 익절 8% / 손절 5%, v3 규칙 = 익절 없음 / 손절 5%. 학습 기대값 순으로 정렬.")
+            st.dataframe(
+                df_grid.sort_values("학습 기대값(%)", ascending=False),
+                use_container_width=True,
+                hide_index=True,
+            )
 
 # 검증 탭
 with tab_verify:
